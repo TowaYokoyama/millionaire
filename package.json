@@ -1,0 +1,41 @@
+{
+  "name": "rn-millonaire",
+  "version": "1.0.0",
+  "description": "大富豪（大貧民）ゲーム - React Native + Node.js実装",
+  "main": "index.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
+    "client": "cd frontend && npm start",
+    "install-all": "npm install && cd frontend && npm install",
+    "build": "cd frontend && npm run build",
+    "setup": "node setup.js",
+    "setup-ts": "node setup-typescript.js",
+    "backend-dev": "cd backend && npm run dev",
+    "frontend-dev": "cd frontend && npm start"
+  },
+  "keywords": [
+    "大富豪",
+    "ゲーム",
+    "React Native",
+    "Node.js",
+    "WebSocket"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.3",
+    "socket.io": "^4.7.2",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5",
+    "@types/uuid": "^10.0.0",
+    "nodemon": "^3.0.1"
+  }
+}
