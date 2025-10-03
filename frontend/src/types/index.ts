@@ -108,42 +108,6 @@ export interface CreateRoomRequest {
   game_settings?: Record<string, any>;
 }
 
-// API レスポンスの型定義
-export interface ApiResponse<T = any> {
-  message?: string;
-  data?: T;
-  error?: string;
-}
-
-export interface PaginatedResponse<T> {
-  data: T[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-// ランキング関連の型定義
-export interface RankingPlayer {
-  id: number;
-  username: string;
-  rating: number;
-  games_played: number;
-  games_won: number;
-  win_rate: number;
-  rank_position: number;
-}
-
-// ゲーム履歴の型定義
-export interface GameHistory {
-  id: number;
-  game_id: number;
-  player_id: number;
-  action_type: string;
-  action_data: Record<string, any>;
-  timestamp: string;
-  username?: string;
-}
-
 // Socket.IO関連の型定義
 export interface SocketEvents {
   // 認証
@@ -183,59 +147,4 @@ export interface SocketEvents {
 
   // 接続状態
   connection_status: (data: { connected: boolean }) => void;
-}
-
-// ナビゲーション関連の型定義
-export type RootStackParamList = {
-  Login: { onLogin: (user: User, token: string) => void };
-  Register: undefined;
-  Lobby: undefined;
-  Room: { roomId: number };
-  Game: { gameId: string };
-  Profile: undefined;
-  Ranking: undefined;
-};
-
-// コンポーネントのProps型定義
-export interface LoginScreenProps {
-  navigation: any;
-  route: {
-    params: {
-      onLogin: (user: User, token: string) => void;
-    };
-  };
-}
-
-export interface RegisterScreenProps {
-  navigation: any;
-}
-
-export interface LobbyScreenProps {
-  navigation: any;
-}
-
-export interface RoomScreenProps {
-  navigation: any;
-  route: {
-    params: {
-      roomId: number;
-    };
-  };
-}
-
-export interface GameScreenProps {
-  navigation: any;
-  route: {
-    params: {
-      gameId: string;
-    };
-  };
-}
-
-export interface ProfileScreenProps {
-  navigation: any;
-}
-
-export interface RankingScreenProps {
-  navigation: any;
 }

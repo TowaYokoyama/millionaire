@@ -32,16 +32,20 @@ export const authenticateToken = async (
     // ユーザー情報をデータベースから取得
     const db = getDatabase();
     const result = await db.query(
-      'SELECT id, username, email, rating, games_played, games_won FROM users WHERE id = $1',
+      'SELECT id, username, email, rating, games_played, games_won FROM users WHERE id = ?',
       [decoded.userId]
     );
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       res.status(401).json({ error: 'ユーザーが見つかりません' });
       return;
     }
 
-    req.user = result.rows[0] as UserProfile;
+    const user = result[0];
+    req.user = {
+      ...user,
+      userId: user.id
+    } as UserProfile;
     next();
   } catch (err: any) {
     if (err.name === 'TokenExpiredError') {
@@ -74,11 +78,19 @@ export const optionalAuth = async (
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number; username: string };
     const db = getDatabase();
     const result = await db.query(
-      'SELECT id, username, email, rating, games_played, games_won FROM users WHERE id = $1',
+      'SELECT id, username, email, rating, games_played, games_won FROM users WHERE id = ?',
       [decoded.userId]
     );
 
-    req.user = result.rows.length > 0 ? result.rows[0] as UserProfile : undefined;
+    if (result.length > 0) {
+      const user = result[0];
+      req.user = {
+        ...user,
+        userId: user.id
+      } as UserProfile;
+    } else {
+      req.user = undefined;
+    }
   } catch (err) {
     req.user = undefined;
   }

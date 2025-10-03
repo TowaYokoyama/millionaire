@@ -21,11 +21,11 @@ router.post('/register', async (req: express.Request, res: express.Response): Pr
 
     // ユーザー名とメールの重複チェック
     const existingUser = await db.query(
-      'SELECT id FROM users WHERE username = $1 OR email = $2',
+      'SELECT id FROM users WHERE username = ? OR email = ?',
       [username, email]
     );
 
-    if (existingUser.rows.length > 0) {
+    if (existingUser.length > 0) {
       res.status(409).json({ error: 'ユーザー名またはメールアドレスが既に使用されています' });
       return;
     }
@@ -35,14 +35,19 @@ router.post('/register', async (req: express.Request, res: express.Response): Pr
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     // ユーザー作成
-    const result = await db.query(
+    const result = await db.run(
       `INSERT INTO users (username, email, password_hash, rating, games_played, games_won) 
-       VALUES ($1, $2, $3, 1000, 0, 0) 
-       RETURNING id, username, email, rating, games_played, games_won, created_at`,
+       VALUES (?, ?, ?, 1000, 0, 0)`,
       [username, email, hashedPassword]
     );
 
-    const user = result.rows[0];
+    // 作成されたユーザー情報を取得
+    const userResult = await db.query(
+      'SELECT id, username, email, rating, games_played, games_won, created_at FROM users WHERE id = ?',
+      [result.lastID]
+    );
+
+    const user = userResult[0];
 
     // JWT生成
     const token = jwt.sign(
@@ -55,6 +60,7 @@ router.post('/register', async (req: express.Request, res: express.Response): Pr
       message: 'ユーザー登録が完了しました',
       user: {
         id: user.id,
+        userId: user.id,
         username: user.username,
         email: user.email,
         rating: user.rating,
@@ -86,16 +92,16 @@ router.post('/login', async (req: express.Request, res: express.Response): Promi
 
     // ユーザー検索
     const result = await db.query(
-      'SELECT id, username, email, password_hash, rating, games_played, games_won, created_at FROM users WHERE username = $1',
+      'SELECT id, username, email, password_hash, rating, games_played, games_won, created_at FROM users WHERE username = ?',
       [username]
     );
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       res.status(401).json({ error: 'ユーザー名またはパスワードが間違っています' });
       return;
     }
 
-    const user = result.rows[0];
+    const user = result[0];
 
     // パスワード確認
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
@@ -115,6 +121,7 @@ router.post('/login', async (req: express.Request, res: express.Response): Promi
       message: 'ログインしました',
       user: {
         id: user.id,
+        userId: user.id,
         username: user.username,
         email: user.email,
         rating: user.rating,
@@ -146,24 +153,28 @@ router.post('/guest', async (req: express.Request, res: express.Response): Promi
 
     // ゲストユーザー名の重複チェック
     const existingUser = await db.query(
-      'SELECT id FROM users WHERE username = $1',
+      'SELECT id FROM users WHERE username = ?',
       [username]
     );
 
-    if (existingUser.rows.length > 0) {
+    if (existingUser.length > 0) {
       res.status(409).json({ error: 'このユーザー名は既に使用されています' });
       return;
     }
 
     // ゲストユーザー作成
-    const result = await db.query(
-      `INSERT INTO users (username, rating, games_played, games_won) 
-       VALUES ($1, 1000, 0, 0) 
-       RETURNING id, username, rating, games_played, games_won, created_at`,
+    const result = await db.run(
+      'INSERT INTO users (username, rating, games_played, games_won) VALUES (?, 1000, 0, 0)',
       [username]
     );
 
-    const user = result.rows[0];
+    // 作成されたユーザー情報を取得
+    const userResult = await db.query(
+      'SELECT id, username, email, rating, games_played, games_won, created_at FROM users WHERE id = ?',
+      [result.lastID]
+    );
+
+    const user = userResult[0];
 
     // JWT生成
     const token = jwt.sign(
@@ -176,6 +187,7 @@ router.post('/guest', async (req: express.Request, res: express.Response): Promi
       message: 'ゲストログインしました',
       user: {
         id: user.id,
+        userId: user.id,
         username: user.username,
         rating: user.rating,
         games_played: user.games_played,
@@ -193,11 +205,37 @@ router.post('/guest', async (req: express.Request, res: express.Response): Promi
 });
 
 // トークン検証
-router.get('/verify', authenticateToken, (req: express.Request, res: express.Response) => {
-  res.json({
-    message: 'トークンは有効です',
-    user: req.user
-  });
+router.get('/verify', authenticateToken, async (req: express.Request, res: express.Response) => {
+  try {
+    const db = getDatabase();
+    const userResult = await db.query(
+      'SELECT id, username, email, rating, games_played, games_won, created_at FROM users WHERE id = ?',
+      [req.user?.userId]
+    );
+
+    if (userResult.length === 0) {
+      res.status(404).json({ error: 'ユーザーが見つかりません' });
+      return;
+    }
+
+    const user = userResult[0];
+    res.json({
+      valid: true,
+      user: {
+        id: user.id,
+        userId: user.id,
+        username: user.username,
+        email: user.email,
+        rating: user.rating,
+        games_played: user.games_played,
+        games_won: user.games_won,
+        created_at: user.created_at
+      }
+    });
+  } catch (error) {
+    console.error('トークン検証エラー:', error);
+    res.status(500).json({ error: 'トークン検証に失敗しました' });
+  }
 });
 
 export default router;

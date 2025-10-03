@@ -59,8 +59,31 @@ export class SQLiteDatabase implements IDatabase {
           console.error('クエリ実行エラー:', err);
           reject(err);
         } else {
-          // PostgreSQLのresult形式に合わせる
-          resolve({ rows: rows || [] });
+          resolve(rows || []);
+        }
+      });
+    });
+  }
+
+  // SQLite専用のallメソッド（直接配列を返す）
+  async all(text: string, params: any[] = []): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) {
+        reject(new Error('データベースが接続されていません'));
+        return;
+      }
+
+      const start = Date.now();
+      
+      this.db.all(text, params, (err, rows) => {
+        const duration = Date.now() - start;
+        console.log('クエリ実行時間:', duration, 'ms');
+        
+        if (err) {
+          console.error('クエリ実行エラー:', err);
+          reject(err);
+        } else {
+          resolve(rows || []);
         }
       });
     });
@@ -69,7 +92,7 @@ export class SQLiteDatabase implements IDatabase {
   async run(text: string, params: any[] = []): Promise<{ lastID?: number; changes?: number }> {
     return new Promise((resolve, reject) => {
       if (!this.db) {
-        reject(new Error('データベースが接続されていません'));
+        reject(new Error('データベースが接続されていません。先にconnect()を呼び出してください。'));
         return;
       }
 
@@ -87,6 +110,24 @@ export class SQLiteDatabase implements IDatabase {
             lastID: this.lastID,
             changes: this.changes
           });
+        }
+      });
+    });
+  }
+
+  async exec(sql: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) {
+        reject(new Error('データベースが接続されていません'));
+        return;
+      }
+
+      this.db.exec(sql, (err) => {
+        if (err) {
+          console.error('SQL実行エラー:', err);
+          reject(err);
+        } else {
+          resolve();
         }
       });
     });

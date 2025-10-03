@@ -1,6 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AuthRequest, RegisterRequest, GuestRequest, AuthResponse, User } from '../types';
+import { AuthRequest, RegisterRequest, GuestRequest, AuthResponse, User } from '@/types';
 
 const API_BASE_URL = 'http://localhost:3000/api';
 
@@ -58,41 +57,27 @@ class AuthService {
     }
   }
 
-  // プロフィール取得
-  static async getProfile(token: string): Promise<User> {
-    try {
-      const response: AxiosResponse<{ user: User }> = await axios.get(`${API_BASE_URL}/auth/profile`, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      return response.data.user;
-    } catch (error: any) {
-      throw new Error(error.response?.data?.error || 'プロフィール取得に失敗しました');
+  // トークン保存
+  static setToken(token: string): void {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('authToken', token);
     }
   }
 
-  // プロフィール更新
-  static async updateProfile(token: string, username: string, email: string): Promise<AuthResponse> {
-    try {
-      const response: AxiosResponse<AuthResponse> = await axios.put(`${API_BASE_URL}/auth/profile`, {
-        username,
-        email
-      }, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      return response.data;
-    } catch (error: any) {
-      throw new Error(error.response?.data?.error || 'プロフィール更新に失敗しました');
+  // トークン取得
+  static getToken(): string | null {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('authToken');
     }
+    return null;
   }
 
   // ログアウト
   static async logout(): Promise<boolean> {
     try {
-      await AsyncStorage.removeItem('authToken');
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('authToken');
+      }
       return true;
     } catch (error) {
       throw new Error('ログアウトに失敗しました');

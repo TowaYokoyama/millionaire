@@ -14,6 +14,7 @@ export interface User {
 
 export interface UserProfile {
   id: number;
+  userId: number;
   username: string;
   email?: string;
   rating: number;

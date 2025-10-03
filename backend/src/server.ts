@@ -30,7 +30,9 @@ const server = http.createServer(app);
 
 // CORS設定
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+  origin: process.env.NODE_ENV === 'development' 
+    ? ["http://localhost:3001", "http://localhost:3000", "http://localhost:19006"]
+    : process.env.CORS_ORIGIN || "http://localhost:3001",
   credentials: true
 };
 app.use(cors(corsOptions));
@@ -90,11 +92,11 @@ initializeDatabase()
   });
 
 // グレースフルシャットダウン
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async() => {
   console.log('SIGTERMシグナルを受信しました');
-  server.close(() => {
+  server.close(async() => {
     console.log('HTTPサーバーを終了しました');
-    db.close();
+    await db.close();
     process.exit(0);
   });
 });

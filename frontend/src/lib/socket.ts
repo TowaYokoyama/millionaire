@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { SocketEvents, GameState, Card, GameRoom, PlayerRanking } from '../types';
+import { SocketEvents, GameState, Card, GameRoom, PlayerRanking } from '@/types';
 
 class SocketService {
   private socket: Socket | null = null;
@@ -16,7 +16,7 @@ class SocketService {
       auth: {
         token: token
       },
-      transports: ['websocket']
+      transports: ['websocket', 'polling']
     });
 
     this.setupEventListeners();
