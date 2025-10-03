@@ -28,14 +28,14 @@ router.get('/ranking', optionalAuth, async (req: express.Request, res: express.R
       SELECT 
         id, username, rating, games_played, games_won,
         CASE 
-          WHEN games_played > 0 THEN ROUND((games_won::float / games_played::float) * 100, 1)
+          WHEN games_played > 0 THEN ROUND((CAST(games_won AS FLOAT) / CAST(games_played AS FLOAT)) * 100, 1)
           ELSE 0 
         END as win_rate,
         ROW_NUMBER() OVER (ORDER BY rating DESC) as rank_position
       FROM users 
       WHERE games_played > 0
       ORDER BY rating DESC, games_won DESC
-      LIMIT $1 OFFSET $2
+      LIMIT ? OFFSET ?
     `, [limit, offset]);
 
     const totalResult = await db.query(
@@ -44,8 +44,8 @@ router.get('/ranking', optionalAuth, async (req: express.Request, res: express.R
 
     res.json({
       message: 'ランキングを取得しました',
-      data: result.rows,
-      total: parseInt(totalResult.rows[0].total),
+      data: result,
+      total: parseInt(totalResult[0].total),
       limit,
       offset
     });
@@ -65,15 +65,15 @@ router.get('/stats/:userId', optionalAuth, async (req: express.Request, res: exp
       SELECT 
         id, username, rating, games_played, games_won,
         CASE 
-          WHEN games_played > 0 THEN ROUND((games_won::float / games_played::float) * 100, 1)
+          WHEN games_played > 0 THEN ROUND((CAST(games_won AS FLOAT) / CAST(games_played AS FLOAT)) * 100, 1)
           ELSE 0 
         END as win_rate,
         created_at
       FROM users 
-      WHERE id = $1
+      WHERE id = ?
     `, [userId]);
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'ユーザーが見つかりません' });
     }
 
@@ -81,13 +81,13 @@ router.get('/stats/:userId', optionalAuth, async (req: express.Request, res: exp
     const rankResult = await db.query(`
       SELECT COUNT(*) + 1 as rank_position
       FROM users 
-      WHERE rating > (SELECT rating FROM users WHERE id = $1)
+      WHERE rating > (SELECT rating FROM users WHERE id = ?)
       AND games_played > 0
     `, [userId]);
 
     const userStats = {
-      ...result.rows[0],
-      rank_position: parseInt(rankResult.rows[0].rank_position)
+      ...result[0],
+      rank_position: parseInt(rankResult[0].rank_position)
     };
 
     res.json({

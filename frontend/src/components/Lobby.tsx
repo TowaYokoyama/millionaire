@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { socketService } from '@/lib/socket';
+import { apiService } from '@/lib/api';
 import { GameRoom } from '@/types';
+import GameScreen from './GameScreen';
 
 export default function Lobby() {
   const { user, logout } = useAuth();
@@ -12,8 +14,13 @@ export default function Lobby() {
   const [roomName, setRoomName] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(4);
   const [isLoading, setIsLoading] = useState(false);
+  const [currentRoomId, setCurrentRoomId] = useState<number | null>(null);
+  const [addCpuPlayers, setAddCpuPlayers] = useState(false);
 
   useEffect(() => {
+    // 初期ルーム一覧取得
+    loadRooms();
+    
     socketService.joinLobby();
 
     const handleRoomUpdate = (data: { room: GameRoom }) => {
@@ -37,25 +44,71 @@ export default function Lobby() {
     };
   }, []);
 
+  const loadRooms = async () => {
+    try {
+      const response = await apiService.getRooms();
+      setRooms(response.rooms || []);
+    } catch (error) {
+      console.error('ルーム一覧取得エラー:', error);
+    }
+  };
+
   const createRoom = async () => {
     if (!roomName.trim()) return;
 
     setIsLoading(true);
     try {
-      console.log('Creating room:', { roomName, maxPlayers });
-    } catch (error) {
+      console.log('Creating room:', { roomName, maxPlayers, addCpuPlayers });
+      const gameSettings = addCpuPlayers ? { addCpuPlayers: true } : {};
+      const response = await apiService.createRoom(roomName, maxPlayers, gameSettings);
+      console.log('Room created:', response);
+      console.log('Room ID:', response.room.id);
+      console.log('Room details:', JSON.stringify(response.room));
+      
+      // ルーム一覧を再読み込み
+      await loadRooms();
+      
+      // ホストは作成したルームに直接参加
+      setCurrentRoomId(response.room.id);
+    } catch (error: any) {
       console.error('ルーム作成エラー:', error);
+      const errorMessage = error.message || 'ルームの作成に失敗しました';
+      alert(`エラー: ${errorMessage}`);
     } finally {
       setIsLoading(false);
       setShowCreateRoom(false);
       setRoomName('');
+      setAddCpuPlayers(false);
     }
   };
 
-  const joinRoom = (roomId: number) => {
-    socketService.joinRoom(roomId);
-    console.log('Joining room:', roomId);
+  const joinRoom = async (roomId: number) => {
+    try {
+      console.log('Joining room:', roomId);
+      await apiService.joinRoom(roomId);
+      socketService.joinRoom(roomId);
+      
+      // ルーム一覧を再読み込み
+      await loadRooms();
+      
+      // ゲーム画面に遷移
+      setCurrentRoomId(roomId);
+      console.log('Successfully joined room:', roomId);
+    } catch (error: any) {
+      console.error('ルーム参加エラー:', error);
+      const errorMessage = error.message || 'ルームへの参加に失敗しました';
+      alert(`エラー: ${errorMessage}`);
+    }
   };
+
+  const backToLobby = () => {
+    setCurrentRoomId(null);
+  };
+
+  // ゲーム画面を表示
+  if (currentRoomId) {
+    return <GameScreen roomId={currentRoomId} onBackToLobby={backToLobby} />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -129,15 +182,30 @@ export default function Lobby() {
                         </div>
                       </div>
                       <div>
-                        {room.status === 'waiting' && room.current_players < room.max_players ? (
+                        {room.host_id === user?.id ? (
+                          // ホストの場合
+                          room.status === 'waiting' ? (
+                            <button
+                              onClick={() => setCurrentRoomId(room.id)}
+                              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+                            >
+                              ゲーム開始
+                            </button>
+                          ) : (
+                            <span className="text-gray-400 text-sm">ゲーム中</span>
+                          )
+                        ) : room.status === 'waiting' && room.current_players < room.max_players ? (
+                          // 他のプレイヤーの場合
                           <button
                             onClick={() => joinRoom(room.id)}
                             className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm font-medium"
                           >
                             参加
                           </button>
+                        ) : room.status === 'waiting' ? (
+                          <span className="text-gray-400 text-sm">満員</span>
                         ) : (
-                          <span className="text-gray-400 text-sm">参加不可</span>
+                          <span className="text-gray-400 text-sm">ゲーム中</span>
                         )}
                       </div>
                     </div>
@@ -184,6 +252,19 @@ export default function Lobby() {
                     <option value={4}>4人</option>
                     <option value={5}>5人</option>
                   </select>
+                </div>
+                <div>
+                  <label className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={addCpuPlayers}
+                      onChange={(e) => setAddCpuPlayers(e.target.checked)}
+                      className="rounded border-gray-300 text-indigo-600 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                    />
+                    <span className="ml-2 text-sm text-gray-700">
+                      CPUプレイヤーを追加する
+                    </span>
+                  </label>
                 </div>
               </div>
               <div className="flex justify-end space-x-3 mt-6">

@@ -45,6 +45,7 @@ export interface Card {
 export interface GamePlayer {
   id: number;
   username: string;
+  cards: Card[];
   cardsCount: number;
   isActive: boolean;
   rank?: number;
