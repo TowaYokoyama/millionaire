@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginForm() {
   const [username, setUsername] = useState('');
@@ -15,16 +15,21 @@ export default function LoginForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('handleSubmit呼び出し: isRegister=', isRegister);
     setIsLoading(true);
     setError('');
 
     try {
       if (isRegister) {
+        console.log('登録処理を呼び出します');
         await register(username, email, password);
       } else {
+        console.log('ログイン処理を呼び出します');
         await login(username, password);
       }
+      console.log('ログイン/登録処理が完了しました');
     } catch (error: any) {
+      console.error('ログイン/登録エラー:', error);
       setError(error.message);
     } finally {
       setIsLoading(false);
@@ -32,7 +37,10 @@ export default function LoginForm() {
   };
 
   const handleGuestLogin = async () => {
+    console.log('handleGuestLogin呼び出し: username=', username);
+    
     if (!username.trim()) {
+      console.log('ユーザー名が空です');
       setError('ユーザー名を入力してください');
       return;
     }
@@ -41,8 +49,11 @@ export default function LoginForm() {
     setError('');
 
     try {
+      console.log('guestLogin関数を呼び出します');
       await guestLogin(username);
+      console.log('ゲストログイン処理が完了しました');
     } catch (error: any) {
+      console.error('ゲストログインエラー:', error);
       setError(error.message);
     } finally {
       setIsLoading(false);

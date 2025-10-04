@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/contexts/AuthContext';
 import { socketService } from '@/lib/socket';
 import { apiService } from '@/lib/api';
 import { GameRoom } from '@/types';

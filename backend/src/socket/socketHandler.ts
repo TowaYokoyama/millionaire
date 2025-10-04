@@ -10,6 +10,80 @@ const connectedUsers = new Map<string, SocketUser>();
 // ゲームエンジンのインスタンスを管理
 const activeGames = new Map<string, GameEngine>();
 
+// CPU自動プレイ実行関数
+function executeCPUTurns(gameId: string, gameInstance: GameEngine, io: SocketIOServer) {
+  // activeGamesから最新のゲームインスタンスを取得
+  const game = activeGames.get(gameId) || gameInstance;
+  
+  if (!game) {
+    console.error(`executeCPUTurns: ゲームが見つかりません (gameId: ${gameId})`);
+    console.log(`activeGames:`, Array.from(activeGames.keys()));
+    return;
+  }
+  
+  const currentPlayer = game.getCurrentPlayer();
+  
+  if (!currentPlayer || !game.isCPUPlayer(currentPlayer.id)) {
+    // CPUプレイヤーではない場合は何もしない
+    console.log(`現在のプレイヤー ${currentPlayer?.username || '不明'} はCPUではありません`);
+    return;
+  }
+
+  console.log(`CPUプレイヤー ${currentPlayer.username} のターンを実行します (gameId: ${gameId})`);
+  
+  const result = game.executeCPUTurn();
+  
+  if (result.success) {
+    const gameState = game.getGameState();
+    console.log(`CPU実行後のゲーム状態を送信: gameId=${gameId}`);
+    
+    // 各プレイヤーに個別にカード情報を含めて送信
+    io.in(gameId).fetchSockets().then(socketsInRoom => {
+      for (const socketInRoom of socketsInRoom) {
+        const socketUser = socketInRoom.data.user as SocketUser;
+        if (socketUser) {
+          const playerCards = game.getPlayerCards(socketUser.userId);
+          socketInRoom.emit('game_state_updated', {
+            gameId: gameId,
+            gameState: {
+              ...gameState,
+              players: gameState.players.map(p => 
+                p.id === socketUser.userId ? { ...p, cards: playerCards } : p
+              )
+            }
+          });
+        }
+      }
+      
+      // ゲーム終了チェック
+      if (gameState.gameState === 'finished') {
+        console.log('CPUターン後にゲームが終了しました。結果を送信します:', gameState.rankings);
+        io.in(gameId).emit('game_ended', {
+          gameId,
+          rankings: gameState.rankings
+        });
+        // ゲームをactiveGamesから削除
+        activeGames.delete(gameId);
+      }
+    });
+
+    if (result.action === 'play') {
+      console.log(`CPU ${currentPlayer.username} がカードをプレイしました:`, result.cards);
+    } else {
+      console.log(`CPU ${currentPlayer.username} がパスしました`);
+    }
+
+    // ゲームが終了していない場合のみ次のプレイヤーを実行
+    const updatedGameState = game.getGameState();
+    if (updatedGameState.gameState !== 'finished') {
+      // 次のプレイヤーもCPUの場合は連続実行
+      setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
+    }
+  } else {
+    console.log(`CPU ${currentPlayer.username} のターン実行に失敗しました`);
+  }
+}
+
 export default function socketHandler(io: SocketIOServer, socket: Socket): void {
   console.log('新しいSocket接続:', socket.id);
 
@@ -193,14 +267,15 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
         console.log(`ゲーム ${gameId} を開始しました。プレイヤー数: ${roomPlayers.length}`);
       }
 
-      // プレイヤーをゲームルームに参加させる
-      socket.join(`game_${gameId}`);
+      // プレイヤーをゲームルームに参加させる（gameIdには既にgame_プレフィックスが含まれている）
+      socket.join(gameId);
       
       // ゲーム状態を送信
       const gameState = game.getGameState();
       const playerCards = game.getPlayerCards(user.userId);
       
       console.log(`ゲーム状態を送信: プレイヤー数=${gameState.players.length}, カード数=${playerCards.length}`);
+      console.log(`activeGamesに保存されているgameId: ${gameId}`);
       console.log(`ゲーム状態:`, JSON.stringify(gameState, null, 2));
       
       socket.emit('game_joined', {
@@ -212,13 +287,16 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
       console.log(`game_joinedイベントを送信しました`);
 
       // 他のプレイヤーにも通知
-      socket.to(`game_${gameId}`).emit('user_joined_game', {
+      socket.to(gameId).emit('user_joined_game', {
         userId: user.userId,
         username: user.username,
         gameId
       });
 
       console.log(`${user.username} がゲーム ${gameId} に参加しました`);
+      
+      // ゲーム開始時、最初のプレイヤーがCPUの場合は自動実行
+      setTimeout(() => executeCPUTurns(gameId, game, io), 2000);
     } catch (error) {
       console.error('ゲーム参加エラー:', error);
       socket.emit('error', { error: 'ゲームへの参加に失敗しました' });
@@ -226,9 +304,12 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
   });
 
   // カードプレイ
-  socket.on('play_cards', (data: { gameId: string; cards: any[] }) => {
+  socket.on('play_cards', async (data: { gameId: string; cards: any[] }) => {
     const { gameId, cards } = data;
     const user = socket.data.user as SocketUser;
+
+    console.log(`play_cardsイベント受信: gameId=${gameId}, user=${user?.username}`);
+    console.log(`現在のactiveGames:`, Array.from(activeGames.keys()));
 
     if (!user) {
       socket.emit('error', { error: '認証が必要です' });
@@ -238,6 +319,8 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
     try {
       const game = activeGames.get(gameId);
       if (!game) {
+        console.error(`ゲームが見つかりません: ${gameId}`);
+        console.log(`利用可能なゲームID:`, Array.from(activeGames.keys()));
         socket.emit('play_error', { message: 'ゲームが見つかりません' });
         return;
       }
@@ -246,14 +329,42 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
       const result = game.playCards(user.userId, cards);
       
       if (result.success) {
-        // ゲーム状態を全員に送信
+        // ゲーム状態を全員に送信（gameIdには既にgame_プレフィックスが含まれている）
         const gameState = game.getGameState();
-        io.to(`game_${gameId}`).emit('game_state_updated', {
-          gameId,
-          gameState
-        });
+        
+        // 各プレイヤーに個別にカード情報を含めて送信
+        const socketsInRoom = await io.in(gameId).fetchSockets();
+        for (const socketInRoom of socketsInRoom) {
+          const socketUser = socketInRoom.data.user as SocketUser;
+          if (socketUser) {
+            const playerCards = game.getPlayerCards(socketUser.userId);
+            socketInRoom.emit('game_state_updated', {
+              gameId,
+              gameState: {
+                ...gameState,
+                players: gameState.players.map(p => 
+                  p.id === socketUser.userId ? { ...p, cards: playerCards } : p
+                )
+              }
+            });
+          }
+        }
 
         console.log(`${user.username} がカードをプレイしました:`, cards);
+        
+        // ゲーム終了チェック
+        if (gameState.gameState === 'finished') {
+          console.log('ゲームが終了しました。結果を送信します:', gameState.rankings);
+          io.in(gameId).emit('game_ended', {
+            gameId,
+            rankings: gameState.rankings
+          });
+          // ゲームをactiveGamesから削除
+          activeGames.delete(gameId);
+        } else {
+          // CPUのターンを自動実行
+          setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
+        }
       } else {
         socket.emit('play_error', { message: result.error });
       }
@@ -264,9 +375,12 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
   });
 
   // パス
-  socket.on('pass', (data: { gameId: string }) => {
+  socket.on('pass', async (data: { gameId: string }) => {
     const { gameId } = data;
     const user = socket.data.user as SocketUser;
+
+    console.log(`passイベント受信: gameId=${gameId}, user=${user?.username}`);
+    console.log(`現在のactiveGames:`, Array.from(activeGames.keys()));
 
     if (!user) {
       socket.emit('error', { error: '認証が必要です' });
@@ -276,6 +390,8 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
     try {
       const game = activeGames.get(gameId);
       if (!game) {
+        console.error(`ゲームが見つかりません: ${gameId}`);
+        console.log(`利用可能なゲームID:`, Array.from(activeGames.keys()));
         socket.emit('pass_error', { message: 'ゲームが見つかりません' });
         return;
       }
@@ -284,14 +400,42 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
       const result = game.pass(user.userId);
       
       if (result.success) {
-        // ゲーム状態を全員に送信
+        // ゲーム状態を全員に送信（gameIdには既にgame_プレフィックスが含まれている）
         const gameState = game.getGameState();
-        io.to(`game_${gameId}`).emit('game_state_updated', {
-          gameId,
-          gameState
-        });
+        
+        // 各プレイヤーに個別にカード情報を含めて送信
+        const socketsInRoom = await io.in(gameId).fetchSockets();
+        for (const socketInRoom of socketsInRoom) {
+          const socketUser = socketInRoom.data.user as SocketUser;
+          if (socketUser) {
+            const playerCards = game.getPlayerCards(socketUser.userId);
+            socketInRoom.emit('game_state_updated', {
+              gameId,
+              gameState: {
+                ...gameState,
+                players: gameState.players.map(p => 
+                  p.id === socketUser.userId ? { ...p, cards: playerCards } : p
+                )
+              }
+            });
+          }
+        }
 
         console.log(`${user.username} がパスしました`);
+        
+        // ゲーム終了チェック
+        if (gameState.gameState === 'finished') {
+          console.log('ゲームが終了しました。結果を送信します:', gameState.rankings);
+          io.in(gameId).emit('game_ended', {
+            gameId,
+            rankings: gameState.rankings
+          });
+          // ゲームをactiveGamesから削除
+          activeGames.delete(gameId);
+        } else {
+          // CPUのターンを自動実行
+          setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
+        }
       } else {
         socket.emit('pass_error', { message: result.error });
       }

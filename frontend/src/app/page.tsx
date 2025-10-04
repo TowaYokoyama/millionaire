@@ -1,11 +1,13 @@
 'use client';
 
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/contexts/AuthContext';
 import LoginForm from '@/components/LoginForm';
 import Lobby from '@/components/Lobby';
 
 export default function Home() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
+
+  console.log('Home render: isLoading=', isLoading, 'isAuthenticated=', isAuthenticated, 'user=', user);
 
   if (isLoading) {
     return (

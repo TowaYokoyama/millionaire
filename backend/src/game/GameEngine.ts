@@ -15,6 +15,7 @@ export class GameEngine {
   private gameHistory: GameAction[] = [];
   private winner: GamePlayer | null = null;
   private rankings: PlayerRanking[] = [];
+  private lastPlayerId: number | null = null; // 最後にカードを出したプレイヤーのID
 
   // ゲーム初期化
   initializeGame(players: Omit<GamePlayer, 'cards' | 'isActive' | 'rank' | 'playerOrder'>[]): void {
@@ -37,6 +38,7 @@ export class GameEngine {
     this.gameHistory = [];
     this.winner = null;
     this.rankings = [];
+    this.lastPlayerId = null;
 
     this.dealCards();
     this.logAction('game_started', { players: this.players.length });
@@ -204,6 +206,9 @@ export class GameEngine {
     this.fieldCount = cards.length;
     this.fieldStrength = this.getCardStrength(cards[0]?.rank || '');
 
+    // 最後にカードを出したプレイヤーを記録
+    this.lastPlayerId = playerId;
+
     // 特殊ルールチェック
     this.checkSpecialRules(cards);
 
@@ -245,9 +250,14 @@ export class GameEngine {
     // ログ記録
     this.logAction('pass', { playerId: playerId });
 
-    // 全員パスした場合
-    if (this.passCount >= this.players.filter(p => p.isActive).length) {
+    // 全員パスした場合（最後にカードを出したプレイヤー以外）
+    const activePlayersCount = this.players.filter(p => p.isActive).length;
+    if (this.passCount >= activePlayersCount - 1 && this.lastPlayerId !== null) {
+      // 場をクリアして、最後にカードを出したプレイヤーのターンにする
       this.clearField();
+      this.setCurrentPlayerById(this.lastPlayerId);
+      this.logAction('turn_reset', { playerId: this.lastPlayerId, reason: 'all_passed' });
+      return { success: true, gameState: this.getGameState() };
     }
 
     this.nextPlayer();
@@ -314,9 +324,20 @@ export class GameEngine {
     } while (!this.players[this.currentPlayerIndex]?.isActive);
   }
 
+  // 特定のプレイヤーを現在のプレイヤーに設定
+  private setCurrentPlayerById(playerId: number): void {
+    const playerIndex = this.players.findIndex(p => p.id === playerId);
+    if (playerIndex !== -1 && this.players[playerIndex]?.isActive) {
+      this.currentPlayerIndex = playerIndex;
+    } else {
+      // プレイヤーが見つからないか、非アクティブの場合は次のアクティブなプレイヤーにする
+      this.nextPlayer();
+    }
+  }
+
   // 現在のプレイヤー取得
-  getCurrentPlayer(): GamePlayer | undefined {
-    return this.players[this.currentPlayerIndex];
+  getCurrentPlayer(): GamePlayer | undefined | null {
+    return this.players[this.currentPlayerIndex] || null;
   }
 
   // プレイヤーの勝利処理
@@ -334,6 +355,22 @@ export class GameEngine {
       playerId: player.id,
       rank: player.rank
     });
+
+    // 上がったプレイヤーが最後にカードを出したプレイヤーの場合、場をクリアして次のプレイヤーのターンにする
+    if (this.lastPlayerId === player.id) {
+      this.clearField();
+      this.lastPlayerId = null;
+      // 次のアクティブなプレイヤーを探す
+      const activePlayers = this.players.filter(p => p.isActive);
+      if (activePlayers.length > 0) {
+        // 現在のインデックスから次のアクティブなプレイヤーを見つける
+        let nextIndex = (this.currentPlayerIndex + 1) % this.players.length;
+        while (!this.players[nextIndex]?.isActive) {
+          nextIndex = (nextIndex + 1) % this.players.length;
+        }
+        this.currentPlayerIndex = nextIndex;
+      }
+    }
 
     // 全員上がったかチェック
     const activePlayers = this.players.filter(p => p.isActive);
@@ -415,4 +452,90 @@ export class GameEngine {
   getRankings(): PlayerRanking[] {
     return this.rankings;
   }
+
+  // CPUプレイヤーかどうか判定
+  isCPUPlayer(playerId: number): boolean {
+    const player = this.players.find(p => p.id === playerId);
+    return player ? player.username.startsWith('CPU_') : false;
+  }
+
+  // CPUプレイヤーの自動プレイ
+  executeCPUTurn(): { success: boolean; action: 'play' | 'pass'; cards?: Card[] } {
+    const currentPlayer = this.players[this.currentPlayerIndex];
+    
+    if (!currentPlayer || !this.isCPUPlayer(currentPlayer.id)) {
+      return { success: false, action: 'pass' };
+    }
+
+    // 出せるカードを探す
+    const playableCards = this.findPlayableCards(currentPlayer);
+
+    if (playableCards.length > 0) {
+      // ランダムに選択（簡易AI）
+      const selectedCards = playableCards[Math.floor(Math.random() * playableCards.length)];
+      if (selectedCards && selectedCards.length > 0) {
+        const result = this.playCards(currentPlayer.id, selectedCards);
+        
+        if (result.success) {
+          return { success: true, action: 'play' as const, cards: selectedCards };
+        }
+      }
+    }
+
+    // 出せるカードがない場合はパス
+    const passResult = this.pass(currentPlayer.id);
+    return { success: passResult.success, action: 'pass' };
+  }
+
+  // 出せるカードの組み合わせを探す
+  private findPlayableCards(player: GamePlayer): Card[][] {
+    const playableCombinations: Card[][] = [];
+
+    // 場にカードがない場合は任意のカードを出せる
+    if (this.fieldCards.length === 0) {
+      // 単体カードを優先
+      for (const card of player.cards) {
+        playableCombinations.push([card]);
+      }
+      return playableCombinations;
+    }
+
+    // 場のカードと同じ枚数で強いカードを探す
+    const requiredCount = this.fieldCount;
+    
+    // 同じランクのカードでグループ化
+    const rankGroups: { [key: string]: Card[] } = {};
+    for (const card of player.cards) {
+      const rankKey = card.rank.toString();
+      if (!rankGroups[rankKey]) {
+        rankGroups[rankKey] = [];
+      }
+      rankGroups[rankKey].push(card);
+    }
+
+    // 各ランクグループから出せるものを探す
+    for (const rankKey in rankGroups) {
+      const cards = rankGroups[rankKey];
+      
+      if (cards && cards.length >= requiredCount) {
+        // 必要枚数分のカードを選択
+        const selectedCards = cards.slice(0, requiredCount);
+        if (selectedCards.length > 0 && selectedCards[0]) {
+          const cardStrength = this.getCardStrength(selectedCards[0].rank.toString());
+          
+          // 場のカードより強いか判定
+          const isStronger = this.revolution 
+            ? cardStrength < this.fieldStrength 
+            : cardStrength > this.fieldStrength;
+          
+          if (isStronger) {
+            playableCombinations.push(selectedCards);
+          }
+        }
+      }
+    }
+
+    return playableCombinations;
+  }
+
 }
