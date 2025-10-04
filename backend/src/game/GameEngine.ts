@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Card, GamePlayer, GameState, PlayerRanking, GameAction } from '../types';
+import { Card, GamePlayer, GameState, PlayerRanking, GameAction, GameRuleSettings } from '../types';
 
 export class GameEngine {
   private gameId: string | null = null;
@@ -16,9 +16,26 @@ export class GameEngine {
   private winner: GamePlayer | null = null;
   private rankings: PlayerRanking[] = [];
   private lastPlayerId: number | null = null; // 最後にカードを出したプレイヤーのID
+  private shibariActive: boolean = false; // しばりが有効かどうか
+  private lastSuit: string | null = null; // 最後に出されたスートを記録
+  
+  // ゲームルール設定
+  private rules: GameRuleSettings = {
+    enable8Cut: true,
+    enableRevolution: true,
+    enableSequence: true,
+    enableSuit: false,
+    enableJBack: false,
+    enableKickback: false,
+    jokerKiller: false,
+    enableShibari: false
+  };
 
   // ゲーム初期化
-  initializeGame(players: Omit<GamePlayer, 'cards' | 'isActive' | 'rank' | 'playerOrder'>[]): void {
+  initializeGame(
+    players: Omit<GamePlayer, 'cards' | 'isActive' | 'rank' | 'playerOrder'>[], 
+    customRules?: GameRuleSettings
+  ): void {
     this.gameId = uuidv4();
     this.players = players.map((player, index) => ({
       ...player,
@@ -39,9 +56,19 @@ export class GameEngine {
     this.winner = null;
     this.rankings = [];
     this.lastPlayerId = null;
+    this.shibariActive = false;
+    this.lastSuit = null;
+    
+    // カスタムルールを適用
+    if (customRules) {
+      this.rules = { ...this.rules, ...customRules };
+    }
 
     this.dealCards();
-    this.logAction('game_started', { players: this.players.length });
+    this.logAction('game_started', { 
+      players: this.players.length,
+      rules: this.rules
+    });
   }
 
   // デッキ作成（52枚 + ジョーカー2枚）
@@ -167,12 +194,42 @@ export class GameEngine {
       return { valid: false, reason: `場のカードと同じ枚数（${this.fieldCount}枚）を出してください` };
     }
 
-    // 同じ数字のカードかチェック
+    // 同じ数字のカードかチェック（階段の場合は除外）
     const ranks = cards.map(card => card.rank);
     const uniqueRanks = [...new Set(ranks)];
     
-    if (uniqueRanks.length > 1) {
+    const isSequencePlay = this.rules.enableSequence && cards.length >= 3 && this.isSequence(cards);
+    
+    if (uniqueRanks.length > 1 && !isSequencePlay) {
       return { valid: false, reason: '同じ数字のカードを出してください' };
+    }
+
+    // しばりチェック
+    if (this.shibariActive && this.lastSuit) {
+      const playedSuits = cards.map(card => card.suit);
+      const allSameSuit = playedSuits.every(suit => suit === this.lastSuit);
+      if (!allSameSuit && !playedSuits.includes('joker')) {
+        return { valid: false, reason: `しばり中！${this.lastSuit}のカードを出してください` };
+      }
+    }
+
+    // スートしばりチェック（同じスートのみ出せる）
+    if (this.rules.enableSuit && this.fieldCards.length > 0) {
+      const fieldSuit = this.fieldCards[0]?.suit;
+      const playedSuits = cards.map(card => card.suit);
+      const allSameSuit = playedSuits.every(suit => suit === fieldSuit || suit === 'joker');
+      if (!allSameSuit) {
+        return { valid: false, reason: `スートしばり！${fieldSuit}のカードを出してください` };
+      }
+    }
+
+    // ジョーカー殺し（スペードの3でジョーカーに勝てる）
+    if (this.rules.jokerKiller) {
+      const hasJoker = this.fieldCards.some(card => card.suit === 'joker');
+      const isSpade3 = cards.length === 1 && cards[0]?.suit === 'spades' && cards[0]?.rank === '3';
+      if (hasJoker && isSpade3) {
+        return { valid: true, reason: 'ジョーカー殺し！' };
+      }
     }
 
     // 強さチェック
@@ -209,14 +266,16 @@ export class GameEngine {
     // 最後にカードを出したプレイヤーを記録
     this.lastPlayerId = playerId;
 
-    // 特殊ルールチェック
-    this.checkSpecialRules(cards);
+    // 特殊ルールチェック（ターン継続が必要かチェック）
+    const shouldContinueTurn = this.checkSpecialRules(cards);
 
     // パスカウントリセット
     this.passCount = 0;
 
-    // 次のプレイヤー
-    this.nextPlayer();
+    // 次のプレイヤー（ターン継続の場合はスキップ）
+    if (!shouldContinueTurn) {
+      this.nextPlayer();
+    }
 
     // ログ記録
     this.logAction('cards_played', {
@@ -264,21 +323,30 @@ export class GameEngine {
     return { success: true, gameState: this.getGameState() };
   }
 
-  // 特殊ルールチェック
-  private checkSpecialRules(cards: Card[]): void {
+  // 特殊ルールチェック（ターン継続が必要な場合はtrueを返す）
+  private checkSpecialRules(cards: Card[]): boolean {
     const rank = cards[0]?.rank;
     const count = cards.length;
+    let shouldContinueTurn = false;
     
-    if (!rank) return;
+    if (!rank) return false;
 
-    // 8切り
-    if (rank === '8') {
-      this.clearField();
+    // 8切り（場をクリアして同じプレイヤーが続けて出す）
+    if (this.rules.enable8Cut && rank === '8') {
       this.logAction('eight_clear', { playerId: this.getCurrentPlayer()?.id });
+      this.clearField();
+      shouldContinueTurn = true;
+    }
+
+    // 10捨て（場をクリアして同じプレイヤーが続けて出す）
+    if (this.rules.enableKickback && rank === '10') {
+      this.logAction('ten_discard', { playerId: this.getCurrentPlayer()?.id });
+      this.clearField();
+      shouldContinueTurn = true;
     }
 
     // 革命（4枚同じ）
-    if (count === 4) {
+    if (this.rules.enableRevolution && count === 4) {
       this.revolution = !this.revolution;
       this.logAction('revolution', { 
         playerId: this.getCurrentPlayer()?.id, 
@@ -286,13 +354,45 @@ export class GameEngine {
       });
     }
 
+    // Jバック（11バック）
+    if (this.rules.enableJBack && rank === 'J') {
+      this.revolution = !this.revolution;
+      this.logAction('j_back', { 
+        playerId: this.getCurrentPlayer()?.id, 
+        revolution: this.revolution 
+      });
+    }
+
+    // 5飛び（次のプレイヤーをスキップ）
+    if (this.rules.enableKickback && rank === '5') {
+      this.logAction('five_skip', { playerId: this.getCurrentPlayer()?.id });
+      this.nextPlayer(); // 1人飛ばす
+    }
+
     // 階段（3枚以上の連番）
-    if (count >= 3 && this.isSequence(cards)) {
+    if (this.rules.enableSequence && count >= 3 && this.isSequence(cards)) {
       this.logAction('sequence', { 
         playerId: this.getCurrentPlayer()?.id, 
         count: count 
       });
     }
+
+    // しばり（同じスートが連続）
+    if (this.rules.enableShibari && this.fieldCards.length > 0) {
+      const currentSuit = cards[0]?.suit;
+      if (currentSuit && currentSuit !== 'joker' && this.lastSuit === currentSuit) {
+        this.shibariActive = true;
+        this.logAction('shibari_active', { 
+          playerId: this.getCurrentPlayer()?.id,
+          suit: currentSuit
+        });
+      } else {
+        this.shibariActive = false;
+      }
+      this.lastSuit = currentSuit || null;
+    }
+    
+    return shouldContinueTurn;
   }
 
   // 連番チェック
@@ -314,6 +414,8 @@ export class GameEngine {
     this.fieldStrength = 0;
     this.fieldCount = 0;
     this.passCount = 0;
+    this.shibariActive = false;
+    this.lastSuit = null;
     this.logAction('field_cleared', {});
   }
 

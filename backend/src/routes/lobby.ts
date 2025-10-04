@@ -1,7 +1,8 @@
 import express from 'express';
 import { getDatabase } from '../container/DIContainer';
 import { authenticateToken } from '../middleware/auth';
-import { CreateRoomRequest } from '../types';
+import { CreateRoomRequest, UpdateRoomRequest, JoinRoomRequest } from '../types';
+import bcrypt from 'bcryptjs';
 
 const router = express.Router();
 
@@ -12,6 +13,10 @@ router.use(authenticateToken);
 router.get('/rooms', async (req: express.Request, res: express.Response) => {
   try {
     const db = getDatabase();
+    const { showPrivate } = req.query;
+    
+    // プライベートルームを含めるかどうか
+    const privateFilter = showPrivate === 'true' ? '' : 'AND r.is_private = 0';
     
     const result = await db.query(`
       SELECT r.*, u.username as host_username,
@@ -19,14 +24,20 @@ router.get('/rooms', async (req: express.Request, res: express.Response) => {
       FROM game_rooms r
       LEFT JOIN users u ON r.host_id = u.id
       LEFT JOIN room_players rp ON r.id = rp.room_id
-      WHERE r.status = 'waiting'
+      WHERE r.status = 'waiting' ${privateFilter}
       GROUP BY r.id, u.username
       ORDER BY r.created_at DESC
     `);
 
+    // パスワードは返さない
+    const sanitizedRooms = result.map((room: any) => {
+      const { password, ...roomWithoutPassword } = room;
+      return roomWithoutPassword;
+    });
+
     res.json({
       message: 'ルーム一覧を取得しました',
-      rooms: result
+      rooms: sanitizedRooms
     });
   } catch (error) {
     console.error('ルーム一覧取得エラー:', error);
@@ -37,20 +48,56 @@ router.get('/rooms', async (req: express.Request, res: express.Response) => {
 // ルーム作成
 router.post('/rooms', async (req: express.Request, res: express.Response) => {
   try {
-    const { room_name, max_players = 4, game_settings = {} }: CreateRoomRequest = req.body;
+    const { 
+      room_name, 
+      description,
+      max_players = 4, 
+      is_private = false,
+      password,
+      game_settings = {} 
+    }: CreateRoomRequest = req.body;
     const hostId = req.user!.id;
 
     if (!room_name) {
       return res.status(400).json({ error: 'ルーム名が必要です' });
     }
 
+    // プライベートルームの場合はパスワード必須
+    if (is_private && !password) {
+      return res.status(400).json({ error: 'プライベートルームにはパスワードが必要です' });
+    }
+
     const db = getDatabase();
+
+    // パスワードをハッシュ化
+    let hashedPassword = null;
+    if (is_private && password) {
+      hashedPassword = await bcrypt.hash(password, 10);
+    }
 
     // ルーム作成
     const roomResult = await db.run(`
-      INSERT INTO game_rooms (room_name, host_id, max_players, current_players, status, game_settings)
-      VALUES (?, ?, ?, 1, 'waiting', ?)
-    `, [room_name, hostId, max_players, JSON.stringify(game_settings)]);
+      INSERT INTO game_rooms (
+        room_name, 
+        description,
+        host_id, 
+        max_players, 
+        current_players, 
+        is_private,
+        password,
+        status, 
+        game_settings
+      )
+      VALUES (?, ?, ?, ?, 1, ?, ?, 'waiting', ?)
+    `, [
+      room_name, 
+      description || null,
+      hostId, 
+      max_players, 
+      is_private ? 1 : 0,
+      hashedPassword,
+      JSON.stringify(game_settings)
+    ]);
 
     const roomId = roomResult.lastID!;
 
@@ -120,6 +167,7 @@ router.post('/rooms', async (req: express.Request, res: express.Response) => {
 router.post('/rooms/:roomId/join', async (req: express.Request, res: express.Response) => {
   try {
     const { roomId } = req.params;
+    const { password }: JoinRoomRequest = req.body;
     const playerId = req.user!.id;
 
     const db = getDatabase();
@@ -135,6 +183,18 @@ router.post('/rooms/:roomId/join', async (req: express.Request, res: express.Res
     }
 
     const room = roomResult[0];
+
+    // プライベートルームの場合はパスワード確認
+    if (room.is_private && room.password) {
+      if (!password) {
+        return res.status(401).json({ error: 'パスワードが必要です' });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, room.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: 'パスワードが正しくありません' });
+      }
+    }
 
     // 既に参加しているかチェック
     const existingPlayer = await db.query(
@@ -276,6 +336,185 @@ router.post('/rooms/:roomId/start', async (req: express.Request, res: express.Re
   } catch (error) {
     console.error('ゲーム開始エラー:', error);
     res.status(500).json({ error: 'ゲームの開始に失敗しました' });
+  }
+});
+
+// ルーム更新
+router.put('/rooms/:roomId', async (req: express.Request, res: express.Response) => {
+  try {
+    const { roomId } = req.params;
+    const {
+      room_name,
+      description,
+      max_players,
+      is_private,
+      password
+    }: UpdateRoomRequest = req.body;
+    const hostId = req.user!.id;
+
+    const db = getDatabase();
+
+    // ルーム存在確認とホスト権限チェック
+    const roomResult = await db.query(
+      'SELECT * FROM game_rooms WHERE id = ? AND host_id = ?',
+      [roomId, hostId]
+    );
+
+    if (roomResult.length === 0) {
+      return res.status(404).json({ error: 'ルームが見つからないか、更新権限がありません' });
+    }
+
+    const room = roomResult[0];
+
+    // 更新するフィールドを構築
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (room_name !== undefined) {
+      updates.push('room_name = ?');
+      values.push(room_name);
+    }
+
+    if (description !== undefined) {
+      updates.push('description = ?');
+      values.push(description || null);
+    }
+
+    if (max_players !== undefined) {
+      // 現在のプレイヤー数より少なくはできない
+      if (max_players < room.current_players) {
+        return res.status(400).json({ 
+          error: `最大プレイヤー数は現在の参加者数（${room.current_players}）以上である必要があります` 
+        });
+      }
+      updates.push('max_players = ?');
+      values.push(max_players);
+    }
+
+    if (is_private !== undefined) {
+      updates.push('is_private = ?');
+      values.push(is_private ? 1 : 0);
+
+      // プライベートに変更する場合はパスワードも設定
+      if (is_private && password) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        updates.push('password = ?');
+        values.push(hashedPassword);
+      } else if (!is_private) {
+        // パブリックに変更する場合はパスワードを削除
+        updates.push('password = ?');
+        values.push(null);
+      }
+    } else if (password !== undefined) {
+      // パスワードのみ更新
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updates.push('password = ?');
+      values.push(hashedPassword);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: '更新する項目がありません' });
+    }
+
+    values.push(roomId);
+
+    await db.run(
+      `UPDATE game_rooms SET ${updates.join(', ')} WHERE id = ?`,
+      values
+    );
+
+    // 更新後のルーム情報を取得
+    const updatedRoom = await db.query(
+      `SELECT r.*, u.username as host_username
+       FROM game_rooms r
+       LEFT JOIN users u ON r.host_id = u.id
+       WHERE r.id = ?`,
+      [roomId]
+    );
+
+    // パスワードは返さない
+    const { password: _, ...roomWithoutPassword } = updatedRoom[0];
+
+    res.json({
+      message: 'ルームを更新しました',
+      room: roomWithoutPassword
+    });
+  } catch (error) {
+    console.error('ルーム更新エラー:', error);
+    res.status(500).json({ error: 'ルームの更新に失敗しました' });
+  }
+});
+
+// ルーム削除
+router.delete('/rooms/:roomId', async (req: express.Request, res: express.Response) => {
+  try {
+    const { roomId } = req.params;
+    const hostId = req.user!.id;
+
+    const db = getDatabase();
+
+    // ルーム存在確認とホスト権限チェック
+    const roomResult = await db.query(
+      'SELECT * FROM game_rooms WHERE id = ? AND host_id = ?',
+      [roomId, hostId]
+    );
+
+    if (roomResult.length === 0) {
+      return res.status(404).json({ error: 'ルームが見つからないか、削除権限がありません' });
+    }
+
+    // ルームを削除（CASCADE設定により room_players も自動削除される）
+    await db.run('DELETE FROM game_rooms WHERE id = ?', [roomId]);
+
+    res.json({
+      message: 'ルームを削除しました',
+      roomId: parseInt(roomId as string)
+    });
+  } catch (error) {
+    console.error('ルーム削除エラー:', error);
+    res.status(500).json({ error: 'ルームの削除に失敗しました' });
+  }
+});
+
+// 特定のルーム情報を取得
+router.get('/rooms/:roomId', async (req: express.Request, res: express.Response) => {
+  try {
+    const { roomId } = req.params;
+    const db = getDatabase();
+
+    const roomResult = await db.query(`
+      SELECT r.*, u.username as host_username
+      FROM game_rooms r
+      LEFT JOIN users u ON r.host_id = u.id
+      WHERE r.id = ?
+    `, [roomId]);
+
+    if (roomResult.length === 0) {
+      return res.status(404).json({ error: 'ルームが見つかりません' });
+    }
+
+    // パスワードは返さない
+    const { password, ...roomWithoutPassword } = roomResult[0];
+
+    // プレイヤー情報も取得
+    const players = await db.query(`
+      SELECT u.id, u.username, u.rating, rp.player_order
+      FROM room_players rp
+      JOIN users u ON rp.player_id = u.id
+      WHERE rp.room_id = ?
+      ORDER BY rp.player_order
+    `, [roomId]);
+
+    res.json({
+      message: 'ルーム情報を取得しました',
+      room: {
+        ...roomWithoutPassword,
+        players
+      }
+    });
+  } catch (error) {
+    console.error('ルーム情報取得エラー:', error);
+    res.status(500).json({ error: 'ルーム情報の取得に失敗しました' });
   }
 });
 

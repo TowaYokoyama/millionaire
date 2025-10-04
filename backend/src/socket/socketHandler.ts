@@ -253,6 +253,21 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
         console.log(`新しいゲーム ${gameId} を作成します`);
         game = new GameEngine();
         
+        // ルーム情報を取得してゲーム設定を取得
+        const roomInfo = await db.query(
+          'SELECT game_settings FROM game_rooms WHERE id = ?',
+          [roomId]
+        );
+        
+        let gameSettings = {};
+        if (roomInfo.length > 0 && roomInfo[0].game_settings) {
+          try {
+            gameSettings = JSON.parse(roomInfo[0].game_settings);
+          } catch (e) {
+            console.error('ゲーム設定のパースエラー:', e);
+          }
+        }
+        
         // プレイヤーデータを準備
         const players = roomPlayers.map(player => ({
           id: player.id,
@@ -261,10 +276,11 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
         }));
         
         // ゲームを初期化（カード配布も含む）
-        game.initializeGame(players);
+        game.initializeGame(players, gameSettings);
         activeGames.set(gameId, game);
         
         console.log(`ゲーム ${gameId} を開始しました。プレイヤー数: ${roomPlayers.length}`);
+        console.log(`ゲーム設定:`, gameSettings);
       }
 
       // プレイヤーをゲームルームに参加させる（gameIdには既にgame_プレフィックスが含まれている）

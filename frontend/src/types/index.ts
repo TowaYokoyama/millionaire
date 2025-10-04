@@ -85,9 +85,11 @@ export interface GameAction {
 export interface GameRoom {
   id: number;
   room_name: string;
+  description?: string;
   host_id: number;
   max_players: number;
   current_players: number;
+  is_private: number;
   status: 'waiting' | 'playing' | 'finished';
   game_settings: Record<string, any>;
   created_at: string;
@@ -103,10 +105,38 @@ export interface RoomPlayer {
   player_order: number;
 }
 
+// ゲームルール設定
+export interface GameRuleSettings {
+  enable8Cut?: boolean;           // 8切り
+  enableRevolution?: boolean;      // 革命（4枚）
+  enableSequence?: boolean;        // 階段
+  enableSuit?: boolean;            // スートしばり
+  enableJBack?: boolean;           // Jバック（11バック）
+  enableKickback?: boolean;        // 5飛び/10捨て
+  jokerKiller?: boolean;           // ジョーカー殺し（スペードの3）
+  enableShibari?: boolean;         // しばり
+  addCpuPlayers?: boolean;         // CPUプレイヤー追加
+}
+
 export interface CreateRoomRequest {
   room_name: string;
+  description?: string;
   max_players?: number;
-  game_settings?: Record<string, any>;
+  is_private?: boolean;
+  password?: string;
+  game_settings?: GameRuleSettings;
+}
+
+export interface UpdateRoomRequest {
+  room_name?: string;
+  description?: string;
+  max_players?: number;
+  is_private?: boolean;
+  password?: string;
+}
+
+export interface JoinRoomRequest {
+  password?: string;
 }
 
 // Socket.IO関連の型定義

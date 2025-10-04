@@ -8,7 +8,9 @@
     "start": "node dist/server.js",
     "dev": "cross-env NODE_ENV=development JWT_SECRET=your-super-secret-jwt-key-change-this-in-production ts-node-dev --respawn --transpile-only src/server.ts",
     "clean": "rm -rf dist",
-    "prebuild": "npm run clean"
+    "prebuild": "npm run clean",
+    "db:migrate": "cross-env NODE_ENV=development JWT_SECRET=your-super-secret-jwt-key ts-node src/database/cleanup.ts migrate",
+    "db:cleanup": "cross-env NODE_ENV=development JWT_SECRET=your-super-secret-jwt-key ts-node src/database/cleanup.ts cleanup"
   },
   "keywords": [
     "大富豪",

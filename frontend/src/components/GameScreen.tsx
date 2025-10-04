@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { socketService } from '@/lib/socket';
 import { apiService } from '@/lib/api';
@@ -21,6 +21,22 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
   const [myCards, setMyCards] = useState<Card[]>([]);
   const [gameFinished, setGameFinished] = useState(false);
   const [finalRankings, setFinalRankings] = useState<any[]>([]);
+  const [roomInfo, setRoomInfo] = useState<any>(null);
+  const [specialRuleAnimation, setSpecialRuleAnimation] = useState<string | null>(null);
+  const lastCheckedActionRef = useRef<string | null>(null);
+
+  // ルーム情報を取得
+  useEffect(() => {
+    const loadRoomInfo = async () => {
+      try {
+        const response = await apiService.getRoom(roomId);
+        setRoomInfo(response.room);
+      } catch (error) {
+        console.error('ルーム情報取得エラー:', error);
+      }
+    };
+    loadRoomInfo();
+  }, [roomId]);
 
   useEffect(() => {
     console.log('GameScreen useEffect: イベントリスナーを設定');
@@ -48,6 +64,9 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
       
       setIsMyTurn(data.gameState.currentPlayer === user?.id);
       setSelectedCards([]); // カードを出した後、選択をクリア
+      
+      // 特殊ルール発動チェック
+      checkSpecialRuleActivation(data.gameState);
     };
 
     const handleGameJoined = (data: { gameId: string; gameState: GameState; playerCards: Card[] }) => {
@@ -107,6 +126,44 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
       socketService.off('game_ended', handleGameEnded);
     };
   }, [user]);
+
+  // 特殊ルール発動チェック
+  const checkSpecialRuleActivation = (state: GameState) => {
+    if (!state.gameHistory || state.gameHistory.length === 0) return;
+    
+    const ruleMessages: { [key: string]: string } = {
+      'eight_clear': '🎴 8切り！',
+      'revolution': '⚡ 革命発動！',
+      'j_back': '🔄 Jバック！',
+      'five_skip': '💨 5飛び！',
+      'ten_discard': '✨ 10捨て！',
+      'sequence': '📈 階段！',
+      'shibari_active': '🔒 しばり！',
+      'turn_reset': '🔄 場流れ！'
+    };
+    
+    // 最後の3つのアクションをチェック（field_clearedで上書きされる場合があるため）
+    const recentActions = state.gameHistory.slice(-3);
+    for (let i = recentActions.length - 1; i >= 0; i--) {
+      const action = recentActions[i];
+      if (action && ruleMessages[action.action]) {
+        // 同じアクションを重複して表示しない
+        const actionKey = `${action.action}_${action.timestamp}`;
+        if (actionKey === lastCheckedActionRef.current) {
+          continue;
+        }
+        
+        // field_cleared以外の特殊ルールを優先
+        if (action.action !== 'field_cleared' && action.action !== 'cards_played' && action.action !== 'pass') {
+          const message = ruleMessages[action.action];
+          lastCheckedActionRef.current = actionKey;
+          setSpecialRuleAnimation(message);
+          setTimeout(() => setSpecialRuleAnimation(null), 3000);
+          break;
+        }
+      }
+    }
+  };
 
   const getMyPlayerOrder = (): number => {
     if (!gameState || !user) return -1;
@@ -221,7 +278,7 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white p-8 rounded-lg shadow-lg text-center">
           <h2 className="text-2xl font-bold mb-4">ゲーム待機中</h2>
-          <p className="text-gray-600 mb-6">ルーム {roomId} でゲームを開始します</p>
+          <p className="text-gray-600 mb-6">ゲームを開始します</p>
           <div className="space-x-4">
             <button
               onClick={startGame}
@@ -310,18 +367,33 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
 
   return (
     <div className="min-h-screen game-table">
+      {/* 特殊ルールアニメーション */}
+      {specialRuleAnimation && (
+        <div className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none">
+          <div className="special-rule-animation text-8xl text-white drop-shadow-2xl"
+               style={{
+                 textShadow: '0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(255, 215, 0, 0.6), 0 0 60px rgba(255, 215, 0, 0.4), 4px 4px 0 #000, -4px -4px 0 #000, -4px 4px 0 #000, 4px -4px 0 #000',
+                 letterSpacing: '0.1em'
+               }}>
+            {specialRuleAnimation}
+          </div>
+        </div>
+      )}
+
       {/* ヘッダー */}
       <header className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 shadow-lg border-b-2 border-yellow-600">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-3">
             <div className="flex items-center gap-3">
               <div className="text-3xl">🎴</div>
-              <h1 className="text-2xl font-bold text-yellow-400">大富豪</h1>
+              <div>
+                <h1 className="text-2xl font-bold text-yellow-400">大富豪</h1>
+                <p className="text-sm text-gray-400">
+                  {roomInfo ? roomInfo.room_name : '読み込み中...'}
+                </p>
+              </div>
             </div>
             <div className="flex items-center space-x-4">
-              <span className="text-gray-300 bg-gray-800 px-3 py-1 rounded-full text-sm">
-                ルーム #{roomId}
-              </span>
               <button
                 onClick={onBackToLobby}
                 className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md transition-colors"

@@ -22,9 +22,12 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS game_rooms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_name TEXT NOT NULL,
+    description TEXT,
     host_id INTEGER NOT NULL,
     max_players INTEGER NOT NULL DEFAULT 4,
     current_players INTEGER NOT NULL DEFAULT 0,
+    is_private INTEGER NOT NULL DEFAULT 0,
+    password TEXT,
     status TEXT NOT NULL DEFAULT 'waiting' 
         CHECK (status IN ('waiting', 'playing', 'finished')),
     game_settings TEXT NOT NULL DEFAULT '{}',
