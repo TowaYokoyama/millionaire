@@ -23,6 +23,7 @@ export default function Lobby() {
   const [isPrivate, setIsPrivate] = useState(false);
   const [roomPassword, setRoomPassword] = useState('');
   const [addCpuPlayers, setAddCpuPlayers] = useState(false);
+  const [rounds, setRounds] = useState(1);
   
   // 特殊ルール設定
   const [enable8Cut, setEnable8Cut] = useState(true);
@@ -113,6 +114,7 @@ export default function Lobby() {
     try {
       const gameSettings = {
         addCpuPlayers,
+        rounds,
         enable8Cut,
         enableRevolution,
         enableSequence,
@@ -141,6 +143,7 @@ export default function Lobby() {
       setIsPrivate(false);
       setRoomPassword('');
       setAddCpuPlayers(false);
+      setRounds(1);
       setEnable8Cut(true);
       setEnableRevolution(true);
       setEnableSequence(true);
@@ -460,6 +463,27 @@ export default function Lobby() {
                   <option value={4}>4人</option>
                   <option value={5}>5人</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  ラウンド数
+                </label>
+                <select
+                  value={rounds}
+                  onChange={(e) => setRounds(Number(e.target.value))}
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 outline-none"
+                >
+                  <option value={1}>1ラウンド</option>
+                  <option value={2}>2ラウンド</option>
+                  <option value={3}>3ラウンド</option>
+                  <option value={4}>4ラウンド（階級戦）</option>
+                </select>
+                {rounds > 1 && (
+                  <p className="mt-2 text-xs text-gray-600">
+                    💡 2ラウンド目以降は順位に応じた階級（大富豪・富豪・貧民・大貧民）が割り当てられ、カード交換が行われます
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg">

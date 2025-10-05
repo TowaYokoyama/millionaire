@@ -1,11 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Card, GamePlayer, GameState, PlayerRanking, GameAction, GameRuleSettings } from '../types';
+import { Card, GamePlayer, GameState, PlayerRanking, GameAction, GameRuleSettings, PlayerRank, PlayerRankInfo } from '../types';
 
 export class GameEngine {
   private gameId: string | null = null;
   private players: GamePlayer[] = [];
   private currentPlayerIndex: number = 0;
-  private gameState: 'waiting' | 'playing' | 'finished' = 'waiting';
+  private gameState: 'waiting' | 'playing' | 'card_exchange' | 'finished' = 'waiting';
   private deck: Card[] = [];
   private fieldCards: Card[] = [];
   private fieldStrength: number = 0;
@@ -18,6 +18,15 @@ export class GameEngine {
   private lastPlayerId: number | null = null; // 最後にカードを出したプレイヤーのID
   private shibariActive: boolean = false; // しばりが有効かどうか
   private lastSuit: string | null = null; // 最後に出されたスートを記録
+  
+  // ラウンドシステム
+  private currentRound: number = 1;
+  private totalRounds: number = 1;
+  private roundRankings: PlayerRankInfo[] = [];
+  private cardExchangeState: {
+    exchangesNeeded: { from: number; to: number; count: number }[];
+    exchangesCompleted: { from: number; to: number; cards: Card[] }[];
+  } = { exchangesNeeded: [], exchangesCompleted: [] };
   
   // ゲームルール設定
   private rules: GameRuleSettings = {
@@ -33,7 +42,7 @@ export class GameEngine {
 
   // ゲーム初期化
   initializeGame(
-    players: Omit<GamePlayer, 'cards' | 'isActive' | 'rank' | 'playerOrder'>[], 
+    players: Omit<GamePlayer, 'cards' | 'isActive' | 'rank' | 'playerOrder' | 'currentRank'>[], 
     customRules?: GameRuleSettings
   ): void {
     this.gameId = uuidv4();
@@ -42,7 +51,8 @@ export class GameEngine {
       cards: [],
       isActive: true,
       rank: undefined,
-      playerOrder: index
+      playerOrder: index,
+      currentRank: null
     }));
     this.currentPlayerIndex = 0;
     this.gameState = 'playing';
@@ -59,6 +69,12 @@ export class GameEngine {
     this.shibariActive = false;
     this.lastSuit = null;
     
+    // ラウンドシステム初期化
+    this.currentRound = 1;
+    this.totalRounds = customRules?.rounds || 1;
+    this.roundRankings = [];
+    this.cardExchangeState = { exchangesNeeded: [], exchangesCompleted: [] };
+    
     // カスタムルールを適用
     if (customRules) {
       this.rules = { ...this.rules, ...customRules };
@@ -67,7 +83,8 @@ export class GameEngine {
     this.dealCards();
     this.logAction('game_started', { 
       players: this.players.length,
-      rules: this.rules
+      rules: this.rules,
+      totalRounds: this.totalRounds
     });
   }
 
@@ -477,14 +494,12 @@ export class GameEngine {
     // 全員上がったかチェック
     const activePlayers = this.players.filter(p => p.isActive);
     if (activePlayers.length <= 1) {
-      this.endGame();
+      this.endRound();
     }
   }
 
-  // ゲーム終了
-  private endGame(): void {
-    this.gameState = 'finished';
-    
+  // ラウンド終了
+  private endRound(): void {
     // 残りのプレイヤーの順位を決定
     const remainingPlayers = this.players.filter(p => p.isActive);
     remainingPlayers.forEach(player => {
@@ -495,9 +510,254 @@ export class GameEngine {
         rank: player.rank,
         cardsLeft: player.cards.length
       });
+      player.isActive = false;
     });
 
-    this.logAction('game_ended', { rankings: this.rankings });
+    // 階級を割り当て
+    this.assignRanks();
+    
+    this.logAction('round_ended', { 
+      round: this.currentRound,
+      rankings: this.rankings,
+      roundRankings: this.roundRankings
+    });
+
+    // 全ラウンドが終了したかチェック
+    if (this.currentRound >= this.totalRounds) {
+      this.endGame();
+    } else {
+      // 次のラウンドの準備（カード交換がある場合）
+      if (this.currentRound > 0 && this.roundRankings.length > 0) {
+        this.prepareCardExchange();
+      } else {
+        this.startNextRound();
+      }
+    }
+  }
+
+  // 階級を割り当て
+  private assignRanks(): void {
+    this.roundRankings = [];
+    
+    if (this.rankings.length === 0) return;
+
+    // プレイヤー数に応じて階級を割り当て
+    const playerCount = this.players.length;
+    const ranks: PlayerRank[] = ['daifugo', 'fugo', 'heimin', 'daihinmin'];
+    
+    this.rankings.forEach((ranking, index) => {
+      const player = this.players.find(p => p.id === ranking.playerId);
+      if (!player) return;
+
+      let rank: PlayerRank;
+      
+      if (playerCount === 4) {
+        rank = ranks[index] || 'heimin';
+      } else if (playerCount === 3) {
+        if (index === 0) rank = 'fugo';
+        else if (index === 1) rank = 'heimin';
+        else rank = 'daihinmin';
+      } else {
+        if (index === 0) rank = 'daifugo';
+        else rank = 'daihinmin';
+      }
+      
+      player.currentRank = rank;
+      
+      this.roundRankings.push({
+        playerId: player.id,
+        username: player.username,
+        rank: rank,
+        finishOrder: index + 1
+      });
+    });
+  }
+
+  // カード交換の準備
+  private prepareCardExchange(): void {
+    this.gameState = 'card_exchange';
+    this.cardExchangeState = { exchangesNeeded: [], exchangesCompleted: [] };
+    
+    const daifugo = this.players.find(p => p.currentRank === 'daifugo');
+    const fugo = this.players.find(p => p.currentRank === 'fugo');
+    const hinmin = this.players.find(p => p.currentRank === 'heimin');
+    const daihinmin = this.players.find(p => p.currentRank === 'daihinmin');
+    
+    // 大富豪と大貧民の交換（2枚）
+    if (daifugo && daihinmin) {
+      this.cardExchangeState.exchangesNeeded.push(
+        { from: daihinmin.id, to: daifugo.id, count: 2 }
+      );
+    }
+    
+    // 富豪と貧民の交換（1枚）
+    if (fugo && hinmin && this.players.length === 4) {
+      this.cardExchangeState.exchangesNeeded.push(
+        { from: hinmin.id, to: fugo.id, count: 1 }
+      );
+    }
+    
+    this.logAction('card_exchange_started', { 
+      exchangesNeeded: this.cardExchangeState.exchangesNeeded 
+    });
+  }
+
+  // カード交換を実行
+  exchangeCards(playerId: number, cards: Card[]): boolean {
+    const exchange = this.cardExchangeState.exchangesNeeded.find(e => e.from === playerId);
+    if (!exchange) {
+      return false;
+    }
+    
+    const player = this.players.find(p => p.id === playerId);
+    if (!player) return false;
+    
+    // カード数チェック
+    if (cards.length !== exchange.count) {
+      return false;
+    }
+    
+    // プレイヤーが持っているカードかチェック
+    const validCards = cards.every(card => 
+      player.cards.some(c => c.id === card.id)
+    );
+    if (!validCards) {
+      return false;
+    }
+    
+    // 大貧民/貧民は最強のカードを出す必要がある
+    const sortedPlayerCards = [...player.cards].sort((a, b) => {
+      const strengthA = this.revolution ? -a.strength : a.strength;
+      const strengthB = this.revolution ? -b.strength : b.strength;
+      return strengthB - strengthA;
+    });
+    
+    const requiredCards = sortedPlayerCards.slice(0, exchange.count);
+    const isCorrectCards = cards.every(card => 
+      requiredCards.some(rc => rc.id === card.id)
+    );
+    
+    if (!isCorrectCards) {
+      return false;
+    }
+    
+    // 交換を記録
+    this.cardExchangeState.exchangesCompleted.push({
+      from: exchange.from,
+      to: exchange.to,
+      cards: cards
+    });
+    
+    this.logAction('cards_exchanged', {
+      from: exchange.from,
+      to: exchange.to,
+      count: cards.length
+    });
+    
+    // 全ての交換が完了したかチェック
+    if (this.cardExchangeState.exchangesCompleted.length === this.cardExchangeState.exchangesNeeded.length) {
+      this.completeCardExchange();
+    }
+    
+    return true;
+  }
+
+  // カード交換を完了
+  private completeCardExchange(): void {
+    // 実際にカードを交換
+    this.cardExchangeState.exchangesCompleted.forEach(exchange => {
+      const fromPlayer = this.players.find(p => p.id === exchange.from);
+      const toPlayer = this.players.find(p => p.id === exchange.to);
+      
+      if (!fromPlayer || !toPlayer) return;
+      
+      // カードを削除
+      exchange.cards.forEach(card => {
+        const index = fromPlayer.cards.findIndex(c => c.id === card.id);
+        if (index !== -1) {
+          fromPlayer.cards.splice(index, 1);
+        }
+      });
+      
+      // 受け取る側（大富豪/富豪）は任意のカードを返す（CPU の場合は最弱のカードを自動選択）
+      const cardsToReturn = this.selectReturnCards(toPlayer, exchange.cards.length);
+      
+      // カードを交換
+      toPlayer.cards.push(...exchange.cards);
+      fromPlayer.cards.push(...cardsToReturn);
+      
+      // 返したカードを削除
+      cardsToReturn.forEach(card => {
+        const index = toPlayer.cards.findIndex(c => c.id === card.id);
+        if (index !== -1) {
+          toPlayer.cards.splice(index, 1);
+        }
+      });
+    });
+    
+    this.logAction('card_exchange_completed', {});
+    this.startNextRound();
+  }
+
+  // 返却カードを選択（CPU用）
+  private selectReturnCards(player: GamePlayer, count: number): Card[] {
+    // 最弱のカードを選択
+    const sortedCards = [...player.cards].sort((a, b) => {
+      const strengthA = this.revolution ? -a.strength : a.strength;
+      const strengthB = this.revolution ? -b.strength : b.strength;
+      return strengthA - strengthB;
+    });
+    return sortedCards.slice(0, count);
+  }
+
+  // 次のラウンドを開始
+  private startNextRound(): void {
+    this.currentRound++;
+    
+    // ゲーム状態をリセット
+    this.players.forEach(p => {
+      p.isActive = true;
+      p.rank = undefined;
+      p.cards = [];
+    });
+    
+    this.gameState = 'playing';
+    this.rankings = [];
+    this.fieldCards = [];
+    this.fieldStrength = 0;
+    this.fieldCount = 0;
+    this.revolution = false;
+    this.passCount = 0;
+    this.lastPlayerId = null;
+    this.shibariActive = false;
+    this.lastSuit = null;
+    this.cardExchangeState = { exchangesNeeded: [], exchangesCompleted: [] };
+    
+    // カードを配る
+    this.deck = this.createDeck();
+    this.dealCards();
+    
+    // 大貧民から開始（いない場合は最初のプレイヤー）
+    const daihinmin = this.players.find(p => p.currentRank === 'daihinmin');
+    if (daihinmin) {
+      this.currentPlayerIndex = this.players.findIndex(p => p.id === daihinmin.id);
+    } else {
+      this.currentPlayerIndex = 0;
+    }
+    
+    this.logAction('round_started', { 
+      round: this.currentRound,
+      totalRounds: this.totalRounds
+    });
+  }
+
+  // ゲーム終了
+  private endGame(): void {
+    this.gameState = 'finished';
+    this.logAction('game_ended', { 
+      rankings: this.rankings,
+      roundRankings: this.roundRankings 
+    });
   }
 
   // アクションログ記録
@@ -523,7 +783,8 @@ export class GameEngine {
         cardsCount: player.cards.length,
         isActive: player.isActive,
         rank: player.rank,
-        playerOrder: player.playerOrder
+        playerOrder: player.playerOrder,
+        currentRank: player.currentRank || null
       })),
       currentPlayer: currentPlayer?.id,
       fieldCards: this.fieldCards,
@@ -532,7 +793,11 @@ export class GameEngine {
       revolution: this.revolution,
       passCount: this.passCount,
       rankings: this.rankings,
-      gameHistory: this.gameHistory.slice(-10) // 最新10件
+      gameHistory: this.gameHistory.slice(-10), // 最新10件
+      currentRound: this.currentRound,
+      totalRounds: this.totalRounds,
+      roundRankings: this.roundRankings,
+      cardExchangeState: this.cardExchangeState
     };
   }
 

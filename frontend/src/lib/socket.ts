@@ -190,6 +190,13 @@ class SocketService {
     }
   }
 
+  // カード交換
+  exchangeCards(gameId: string, cards: Card[]): void {
+    if (this.socket) {
+      this.socket.emit('exchange_cards', { gameId, cards });
+    }
+  }
+
   // 接続切断
   disconnect(): void {
     if (this.socket) {

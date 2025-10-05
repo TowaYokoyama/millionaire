@@ -24,6 +24,7 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
   const [roomInfo, setRoomInfo] = useState<any>(null);
   const [specialRuleAnimation, setSpecialRuleAnimation] = useState<string | null>(null);
   const lastCheckedActionRef = useRef<string | null>(null);
+  const [cardsToExchange, setCardsToExchange] = useState<Card[]>([]);
 
   // ルーム情報を取得
   useEffect(() => {
@@ -247,6 +248,35 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
     console.log('passイベントを送信しました。gameId:', gameIdToUse);
   };
 
+  const handleExchangeCards = () => {
+    if (!gameState || cardsToExchange.length === 0) return;
+    
+    const gameIdToUse = gameState.gameId || `game_${roomId}`;
+    socketService.exchangeCards(gameIdToUse, cardsToExchange);
+    setCardsToExchange([]);
+    console.log('カード交換を送信しました:', cardsToExchange);
+  };
+
+  const handleCardSelectForExchange = (card: Card) => {
+    if (gameState?.gameState !== 'card_exchange') return;
+    
+    // 必要な交換枚数を取得
+    const myExchange = gameState.cardExchangeState?.exchangesNeeded.find(
+      e => e.from === user?.id
+    );
+    if (!myExchange) return;
+    
+    setCardsToExchange(prev => {
+      const isSelected = prev.some(c => c.id === card.id);
+      if (isSelected) {
+        return prev.filter(c => c.id !== card.id);
+      } else if (prev.length < myExchange.count) {
+        return [...prev, card];
+      }
+      return prev;
+    });
+  };
+
   const startGame = async () => {
     if (isStarting) {
       console.log('Already starting game, ignoring duplicate request');
@@ -391,6 +421,11 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
                 <p className="text-sm text-gray-400">
                   {roomInfo ? roomInfo.room_name : '読み込み中...'}
                 </p>
+                {gameState.totalRounds && gameState.totalRounds > 1 && (
+                  <p className="text-sm text-yellow-500 font-semibold">
+                    ラウンド {gameState.currentRound} / {gameState.totalRounds}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex items-center space-x-4">
@@ -407,6 +442,110 @@ export default function GameScreen({ roomId, onBackToLobby }: GameScreenProps) {
 
       {/* ゲームエリア */}
       <main className="max-w-7xl mx-auto py-6 px-4">
+        {/* カード交換画面 */}
+        {gameState.gameState === 'card_exchange' && (
+          <div className="mb-8 bg-gradient-to-b from-purple-900/90 to-indigo-900/90 backdrop-blur-md p-8 rounded-2xl shadow-2xl border-2 border-purple-600">
+            <h2 className="text-3xl font-bold text-yellow-400 mb-4 text-center flex items-center justify-center gap-3">
+              <span>🔄</span> カード交換
+            </h2>
+            
+            {/* 階級表示 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              {gameState.roundRankings?.map((rankInfo) => {
+                const isMe = rankInfo.playerId === user?.id;
+                const rankLabels: { [key: string]: string } = {
+                  'daifugo': '大富豪',
+                  'fugo': '富豪',
+                  'heimin': '平民',
+                  'daihinmin': '大貧民'
+                };
+                const rankColors: { [key: string]: string } = {
+                  'daifugo': 'from-yellow-400 to-yellow-600',
+                  'fugo': 'from-orange-400 to-orange-600',
+                  'heimin': 'from-gray-400 to-gray-600',
+                  'daihinmin': 'from-blue-400 to-blue-600'
+                };
+                
+                return (
+                  <div key={rankInfo.playerId} className={`p-4 rounded-xl ${isMe ? 'border-4 border-blue-400' : 'border-2 border-gray-600'} bg-gray-800`}>
+                    <div className={`text-center text-lg font-bold bg-gradient-to-r ${rankColors[rankInfo.rank]} bg-clip-text text-transparent`}>
+                      {rankLabels[rankInfo.rank]}
+                    </div>
+                    <div className="text-center text-white mt-2">
+                      {rankInfo.username}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 交換が必要なプレイヤー */}
+            {gameState.cardExchangeState?.exchangesNeeded.some(e => e.from === user?.id) && (
+              <div className="bg-gray-800/80 p-6 rounded-xl border-2 border-yellow-500">
+                <h3 className="text-xl font-bold text-yellow-400 mb-4 text-center">
+                  カードを選択してください
+                </h3>
+                
+                {(() => {
+                  const myExchange = gameState.cardExchangeState?.exchangesNeeded.find(e => e.from === user?.id);
+                  if (!myExchange) return null;
+                  
+                  const exchangeCount = myExchange.count;
+                  const toPlayer = gameState.players.find(p => p.id === myExchange.to);
+                  
+                  return (
+                    <>
+                      <p className="text-center text-gray-300 mb-4">
+                        {toPlayer?.username}に<span className="text-yellow-400 font-bold text-xl">{exchangeCount}枚</span>の最強カードを渡します
+                      </p>
+                      
+                      {/* カード選択エリア */}
+                      <div className="flex flex-wrap gap-3 mb-6 justify-center">
+                        {getMyCards().map((card) => {
+                          const isSelected = cardsToExchange.some(c => c.id === card.id);
+                          return (
+                            <button
+                              key={card.id}
+                              onClick={() => handleCardSelectForExchange(card)}
+                              className={`w-20 h-28 border-3 rounded-xl flex flex-col items-center justify-center card-transition ${
+                                isSelected
+                                  ? 'border-yellow-400 bg-gradient-to-b from-yellow-100 to-white -translate-y-3 shadow-2xl scale-105'
+                                  : 'border-gray-700 bg-white hover:border-blue-400 hover:-translate-y-2'
+                              } cursor-pointer hover:shadow-xl ${getSuitColor(card.suit)}`}
+                            >
+                              <div className="text-2xl font-bold">{getRankDisplay(card.rank.toString())}</div>
+                              <div className="text-xl">{getSuitSymbol(card.suit)}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      
+                      {/* 交換ボタン */}
+                      <div className="text-center">
+                        <button
+                          onClick={handleExchangeCards}
+                          disabled={cardsToExchange.length !== exchangeCount}
+                          className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 disabled:from-gray-500 disabled:to-gray-600 text-white px-8 py-3 rounded-lg font-bold text-lg transition-all disabled:cursor-not-allowed"
+                        >
+                          カードを交換する ({cardsToExchange.length}/{exchangeCount})
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* 交換を待っているプレイヤー */}
+            {!gameState.cardExchangeState?.exchangesNeeded.some(e => e.from === user?.id) && (
+              <div className="bg-gray-800/80 p-6 rounded-xl border-2 border-gray-600 text-center">
+                <p className="text-gray-300 text-lg">他のプレイヤーのカード交換を待っています...</p>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-400 mx-auto mt-4"></div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* プレイヤー情報 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           {gameState.players.map((player) => {

@@ -41,6 +41,16 @@ export interface Card {
   id: string;
 }
 
+// 階級の型定義
+export type PlayerRank = 'daifugo' | 'fugo' | 'heimin' | 'daihinmin';
+
+export interface PlayerRankInfo {
+  playerId: number;
+  username: string;
+  rank: PlayerRank;
+  finishOrder: number;
+}
+
 // ゲーム関連の型定義
 export interface GamePlayer {
   id: number;
@@ -50,11 +60,12 @@ export interface GamePlayer {
   isActive: boolean;
   rank?: number;
   playerOrder: number;
+  currentRank?: PlayerRank | null;
 }
 
 export interface GameState {
   gameId: string;
-  gameState: 'waiting' | 'playing' | 'finished';
+  gameState: 'waiting' | 'playing' | 'card_exchange' | 'finished';
   players: GamePlayer[];
   currentPlayer?: number;
   fieldCards: Card[];
@@ -65,6 +76,15 @@ export interface GameState {
   rankings: PlayerRanking[];
   gameHistory: GameAction[];
   playerCards?: Card[];
+  // ラウンド情報
+  currentRound?: number;
+  totalRounds?: number;
+  roundRankings?: PlayerRankInfo[];
+  // カード交換情報
+  cardExchangeState?: {
+    exchangesNeeded: { from: number; to: number; count: number }[];
+    exchangesCompleted: { from: number; to: number; cards: Card[] }[];
+  };
 }
 
 export interface PlayerRanking {
@@ -107,6 +127,7 @@ export interface RoomPlayer {
 
 // ゲームルール設定
 export interface GameRuleSettings {
+  rounds?: number;                 // ラウンド数（1-4）
   enable8Cut?: boolean;           // 8切り
   enableRevolution?: boolean;      // 革命（4枚）
   enableSequence?: boolean;        // 階段
@@ -169,6 +190,8 @@ export interface SocketEvents {
   game_joined: (data: { gameId: string; gameState: GameState; playerCards: Card[] }) => void;
   game_state_updated: (data: { gameId: string; gameState: GameState }) => void;
   game_ended: (data: { gameId: string; rankings: PlayerRanking[] }) => void;
+  round_ended: (data: { gameId: string; roundRankings: PlayerRankInfo[] }) => void;
+  exchange_cards: (data: { gameId: string; cards: Card[] }) => void;
   user_left_game: (data: { userId: number; username: string; gameId: string }) => void;
 
   // エラー

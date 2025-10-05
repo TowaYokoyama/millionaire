@@ -461,6 +461,66 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
     }
   });
 
+  // カード交換
+  socket.on('exchange_cards', async (data: { gameId: string; cards: any[] }) => {
+    const { gameId, cards } = data;
+    const user = socket.data.user as SocketUser;
+
+    console.log(`exchange_cardsイベント受信: gameId=${gameId}, user=${user?.username}, cards=${cards.length}枚`);
+
+    if (!user) {
+      socket.emit('error', { error: '認証が必要です' });
+      return;
+    }
+
+    try {
+      const game = activeGames.get(gameId);
+      if (!game) {
+        console.error(`ゲームが見つかりません: ${gameId}`);
+        socket.emit('error', { message: 'ゲームが見つかりません' });
+        return;
+      }
+
+      // カード交換処理
+      const success = game.exchangeCards(user.userId, cards);
+      
+      if (success) {
+        // ゲーム状態を全員に送信
+        const gameState = game.getGameState();
+        
+        // 各プレイヤーに個別にカード情報を含めて送信
+        const socketsInRoom = await io.in(gameId).fetchSockets();
+        for (const socketInRoom of socketsInRoom) {
+          const socketUser = socketInRoom.data.user as SocketUser;
+          if (socketUser) {
+            const playerCards = game.getPlayerCards(socketUser.userId);
+            socketInRoom.emit('game_state_updated', {
+              gameId,
+              gameState: {
+                ...gameState,
+                players: gameState.players.map(p => 
+                  p.id === socketUser.userId ? { ...p, cards: playerCards } : p
+                )
+              }
+            });
+          }
+        }
+
+        console.log(`${user.username} がカードを交換しました`);
+        
+        // カード交換が完了してゲームが再開された場合、CPUのターンを実行
+        if (gameState.gameState === 'playing') {
+          setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
+        }
+      } else {
+        socket.emit('error', { message: 'カード交換に失敗しました' });
+      }
+    } catch (error) {
+      console.error('カード交換エラー:', error);
+      socket.emit('error', { message: 'カード交換に失敗しました' });
+    }
+  });
+
   // チャットメッセージ
   socket.on('chat_message', (data: { roomId: string; message: string }) => {
     const { roomId, message } = data;
