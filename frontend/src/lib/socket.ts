@@ -12,7 +12,9 @@ class SocketService {
       this.disconnect();
     }
 
-    this.socket = io('http://localhost:3000', {
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:3001';
+    
+    this.socket = io(wsUrl, {
       auth: {
         token: token
       },
