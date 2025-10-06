@@ -10,7 +10,16 @@
     "clean": "rm -rf dist",
     "prebuild": "npm run clean",
     "db:migrate": "cross-env NODE_ENV=development JWT_SECRET=your-super-secret-jwt-key ts-node src/database/cleanup.ts migrate",
-    "db:cleanup": "cross-env NODE_ENV=development JWT_SECRET=your-super-secret-jwt-key ts-node src/database/cleanup.ts cleanup"
+    "db:cleanup": "cross-env NODE_ENV=development JWT_SECRET=your-super-secret-jwt-key ts-node src/database/cleanup.ts cleanup",
+    "db:optimize": "sqlite3 database/millonaire_game.db < database/optimize.sql",
+    "docker:redis": "docker-compose up -d redis",
+    "docker:redis:stop": "docker-compose stop redis",
+    "docker:redis:logs": "docker-compose logs -f redis",
+    "docker:down": "docker-compose down",
+    "docker:down:volumes": "docker-compose down -v",
+    "redis:cli": "docker exec -it millonaire_redis redis-cli",
+    "redis:flush": "docker exec -it millonaire_redis redis-cli FLUSHALL",
+    "redis:stats": "docker exec -it millonaire_redis redis-cli INFO stats"
   },
   "keywords": [
     "大富豪",
@@ -22,12 +31,17 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "@types/ioredis": "^4.28.10",
     "@types/sqlite3": "^3.1.11",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "express-rate-limit": "^8.1.0",
+    "ioredis": "^5.8.0",
     "jsonwebtoken": "^9.0.2",
+    "rate-limit-redis": "^4.2.2",
     "socket.io": "^4.7.2",
     "sqlite3": "^5.1.7",
     "uuid": "^9.0.0"

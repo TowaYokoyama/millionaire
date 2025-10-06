@@ -64,6 +64,10 @@ function executeCPUTurns(gameId: string, gameInstance: GameEngine, io: SocketIOS
         });
         // ゲームをactiveGamesから削除
         activeGames.delete(gameId);
+      } else if (gameState.gameState === 'card_exchange') {
+        // カード交換フェーズに入った場合
+        console.log('CPUターン後にラウンド終了。カード交換を自動実行中...');
+        setTimeout(() => monitorRoundTransition(gameId, game, io), 2500);
       }
     });
 
@@ -81,6 +85,44 @@ function executeCPUTurns(gameId: string, gameInstance: GameEngine, io: SocketIOS
     }
   } else {
     console.log(`CPU ${currentPlayer.username} のターン実行に失敗しました`);
+  }
+}
+
+// ラウンド終了後の自動処理を監視
+function monitorRoundTransition(gameId: string, gameInstance: GameEngine, io: SocketIOServer) {
+  const game = activeGames.get(gameId) || gameInstance;
+  
+  if (!game) {
+    return;
+  }
+
+  const gameState = game.getGameState();
+  
+  // カード交換フェーズからplayingに移行したかチェック
+  if (gameState.gameState === 'playing') {
+    console.log('カード交換完了。次のラウンドが開始されました');
+    
+    // ゲーム状態を全員に送信
+    io.in(gameId).fetchSockets().then(socketsInRoom => {
+      for (const socketInRoom of socketsInRoom) {
+        const socketUser = socketInRoom.data.user as SocketUser;
+        if (socketUser) {
+          const playerCards = game.getPlayerCards(socketUser.userId);
+          socketInRoom.emit('game_state_updated', {
+            gameId: gameId,
+            gameState: {
+              ...gameState,
+              players: gameState.players.map(p => 
+                p.id === socketUser.userId ? { ...p, cards: playerCards } : p
+              )
+            }
+          });
+        }
+      }
+    });
+    
+    // CPUのターンを実行
+    setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
   }
 }
 
@@ -377,6 +419,10 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
           });
           // ゲームをactiveGamesから削除
           activeGames.delete(gameId);
+        } else if (gameState.gameState === 'card_exchange') {
+          // カード交換フェーズに入った場合、自動的に次のラウンドが開始されるまで待機
+          console.log('ラウンド終了。カード交換を自動実行中...');
+          setTimeout(() => monitorRoundTransition(gameId, game, io), 2500);
         } else {
           // CPUのターンを自動実行
           setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
@@ -448,6 +494,10 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
           });
           // ゲームをactiveGamesから削除
           activeGames.delete(gameId);
+        } else if (gameState.gameState === 'card_exchange') {
+          // カード交換フェーズに入った場合、自動的に次のラウンドが開始されるまで待機
+          console.log('ラウンド終了。カード交換を自動実行中...');
+          setTimeout(() => monitorRoundTransition(gameId, game, io), 2500);
         } else {
           // CPUのターンを自動実行
           setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
@@ -461,65 +511,6 @@ export default function socketHandler(io: SocketIOServer, socket: Socket): void 
     }
   });
 
-  // カード交換
-  socket.on('exchange_cards', async (data: { gameId: string; cards: any[] }) => {
-    const { gameId, cards } = data;
-    const user = socket.data.user as SocketUser;
-
-    console.log(`exchange_cardsイベント受信: gameId=${gameId}, user=${user?.username}, cards=${cards.length}枚`);
-
-    if (!user) {
-      socket.emit('error', { error: '認証が必要です' });
-      return;
-    }
-
-    try {
-      const game = activeGames.get(gameId);
-      if (!game) {
-        console.error(`ゲームが見つかりません: ${gameId}`);
-        socket.emit('error', { message: 'ゲームが見つかりません' });
-        return;
-      }
-
-      // カード交換処理
-      const success = game.exchangeCards(user.userId, cards);
-      
-      if (success) {
-        // ゲーム状態を全員に送信
-        const gameState = game.getGameState();
-        
-        // 各プレイヤーに個別にカード情報を含めて送信
-        const socketsInRoom = await io.in(gameId).fetchSockets();
-        for (const socketInRoom of socketsInRoom) {
-          const socketUser = socketInRoom.data.user as SocketUser;
-          if (socketUser) {
-            const playerCards = game.getPlayerCards(socketUser.userId);
-            socketInRoom.emit('game_state_updated', {
-              gameId,
-              gameState: {
-                ...gameState,
-                players: gameState.players.map(p => 
-                  p.id === socketUser.userId ? { ...p, cards: playerCards } : p
-                )
-              }
-            });
-          }
-        }
-
-        console.log(`${user.username} がカードを交換しました`);
-        
-        // カード交換が完了してゲームが再開された場合、CPUのターンを実行
-        if (gameState.gameState === 'playing') {
-          setTimeout(() => executeCPUTurns(gameId, game, io), 1500);
-        }
-      } else {
-        socket.emit('error', { message: 'カード交換に失敗しました' });
-      }
-    } catch (error) {
-      console.error('カード交換エラー:', error);
-      socket.emit('error', { message: 'カード交換に失敗しました' });
-    }
-  });
 
   // チャットメッセージ
   socket.on('chat_message', (data: { roomId: string; message: string }) => {

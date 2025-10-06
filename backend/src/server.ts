@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -12,6 +13,12 @@ dotenv.config();
 import { initializeContainer, getDatabase } from './container/DIContainer';
 import { initializeDatabase } from './database/initDatabase';
 initializeContainer();
+
+// Redis初期化
+import { redisClient } from './cache/RedisClient';
+
+// レート制限ミドルウェア
+import { apiLimiter, authLimiter, createRoomLimiter, lobbyLimiter } from './middleware/rateLimit';
 
 // ルートの読み込み
 import authRoutes from './routes/auth';
@@ -37,10 +44,25 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// Socket.IO設定
+// Socket.IO設定（Redis Adapter付き）
 const io = new SocketIOServer(server, {
-  cors: corsOptions
+  cors: corsOptions,
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
+
+// Redis Adapterを設定（水平スケーリング対応）
+(async () => {
+  try {
+    const { pubClient, subClient } = redisClient.getPubSubClients();
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('✅ Socket.IO Redis Adapter initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize Socket.IO Redis Adapter:', error);
+    console.log('⚠️  Running without Redis Adapter (single instance mode)');
+  }
+})();
 
 // ミドルウェア
 app.use(express.json());
@@ -49,10 +71,13 @@ app.use(express.urlencoded({ extended: true }));
 // 静的ファイルの提供
 app.use(express.static(path.join(__dirname, '../frontend/build')));
 
-// API ルート
-app.use('/api/auth', authRoutes);
+// グローバルレート制限（全APIに適用）
+app.use('/api/', apiLimiter);
+
+// API ルート（個別のレート制限付き）
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/game', gameRoutes);
-app.use('/api/lobby', lobbyRoutes);
+app.use('/api/lobby', lobbyLimiter, lobbyRoutes);
 app.use('/api/user', userRoutes);
 
 // Socket.IO接続処理
@@ -97,15 +122,19 @@ process.on('SIGTERM', async() => {
   server.close(async() => {
     console.log('HTTPサーバーを終了しました');
     await db.close();
+    await redisClient.close();
+    console.log('Redisとの接続を終了しました');
     process.exit(0);
   });
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async() => {
   console.log('SIGINTシグナルを受信しました');
-  server.close(() => {
+  server.close(async() => {
     console.log('HTTPサーバーを終了しました');
-    db.close();
+    await db.close();
+    await redisClient.close();
+    console.log('Redisとの接続を終了しました');
     process.exit(0);
   });
 });

@@ -573,7 +573,7 @@ export class GameEngine {
     });
   }
 
-  // カード交換の準備
+  // カード交換の準備（自動実行）
   private prepareCardExchange(): void {
     this.gameState = 'card_exchange';
     this.cardExchangeState = { exchangesNeeded: [], exchangesCompleted: [] };
@@ -583,22 +583,76 @@ export class GameEngine {
     const hinmin = this.players.find(p => p.currentRank === 'heimin');
     const daihinmin = this.players.find(p => p.currentRank === 'daihinmin');
     
-    // 大富豪と大貧民の交換（2枚）
-    if (daifugo && daihinmin) {
-      this.cardExchangeState.exchangesNeeded.push(
-        { from: daihinmin.id, to: daifugo.id, count: 2 }
-      );
-    }
-    
-    // 富豪と貧民の交換（1枚）
-    if (fugo && hinmin && this.players.length === 4) {
-      this.cardExchangeState.exchangesNeeded.push(
-        { from: hinmin.id, to: fugo.id, count: 1 }
-      );
-    }
-    
     this.logAction('card_exchange_started', { 
-      exchangesNeeded: this.cardExchangeState.exchangesNeeded 
+      message: 'カード交換を自動実行します' 
+    });
+    
+    // 大富豪と大貧民の交換（2枚ずつ）
+    if (daifugo && daihinmin) {
+      // 大貧民から最強カード2枚を取得
+      const daihinminStrongest = this.getStrongestCards(daihinmin, 2);
+      // 大富豪から最弱カード2枚を取得
+      const daifugoWeakest = this.getWeakestCards(daifugo, 2);
+      
+      // カードを交換
+      this.transferCards(daihinmin, daifugo, daihinminStrongest);
+      this.transferCards(daifugo, daihinmin, daifugoWeakest);
+      
+      console.log(`カード交換: ${daihinmin.username} → ${daifugo.username} (2枚)`);
+      console.log(`カード交換: ${daifugo.username} → ${daihinmin.username} (2枚)`);
+    }
+    
+    // 富豪と貧民の交換（1枚ずつ）
+    if (fugo && hinmin && this.players.length === 4) {
+      // 貧民から最強カード1枚を取得
+      const hinminStrongest = this.getStrongestCards(hinmin, 1);
+      // 富豪から最弱カード1枚を取得
+      const fugoWeakest = this.getWeakestCards(fugo, 1);
+      
+      // カードを交換
+      this.transferCards(hinmin, fugo, hinminStrongest);
+      this.transferCards(fugo, hinmin, fugoWeakest);
+      
+      console.log(`カード交換: ${hinmin.username} → ${fugo.username} (1枚)`);
+      console.log(`カード交換: ${fugo.username} → ${hinmin.username} (1枚)`);
+    }
+    
+    this.logAction('card_exchange_completed', {});
+    
+    // カード交換完了後、2秒待ってから次のラウンドを開始
+    setTimeout(() => {
+      this.startNextRound();
+    }, 2000);
+  }
+  
+  // 最強カードを取得
+  private getStrongestCards(player: GamePlayer, count: number): Card[] {
+    const sortedCards = [...player.cards].sort((a, b) => {
+      const strengthA = this.revolution ? -a.strength : a.strength;
+      const strengthB = this.revolution ? -b.strength : b.strength;
+      return strengthB - strengthA;
+    });
+    return sortedCards.slice(0, count);
+  }
+  
+  // 最弱カードを取得
+  private getWeakestCards(player: GamePlayer, count: number): Card[] {
+    const sortedCards = [...player.cards].sort((a, b) => {
+      const strengthA = this.revolution ? -a.strength : a.strength;
+      const strengthB = this.revolution ? -b.strength : b.strength;
+      return strengthA - strengthB;
+    });
+    return sortedCards.slice(0, count);
+  }
+  
+  // カードを転送
+  private transferCards(fromPlayer: GamePlayer, toPlayer: GamePlayer, cards: Card[]): void {
+    cards.forEach(card => {
+      const index = fromPlayer.cards.findIndex(c => c.id === card.id);
+      if (index !== -1) {
+        fromPlayer.cards.splice(index, 1);
+        toPlayer.cards.push(card);
+      }
     });
   }
 
@@ -606,6 +660,14 @@ export class GameEngine {
   exchangeCards(playerId: number, cards: Card[]): boolean {
     const exchange = this.cardExchangeState.exchangesNeeded.find(e => e.from === playerId);
     if (!exchange) {
+      return false;
+    }
+    
+    // 既に交換済みかチェック
+    const alreadyExchanged = this.cardExchangeState.exchangesCompleted.some(
+      e => e.from === exchange.from && e.to === exchange.to
+    );
+    if (alreadyExchanged) {
       return false;
     }
     
@@ -625,21 +687,24 @@ export class GameEngine {
       return false;
     }
     
-    // 大貧民/貧民は最強のカードを出す必要がある
-    const sortedPlayerCards = [...player.cards].sort((a, b) => {
-      const strengthA = this.revolution ? -a.strength : a.strength;
-      const strengthB = this.revolution ? -b.strength : b.strength;
-      return strengthB - strengthA;
-    });
-    
-    const requiredCards = sortedPlayerCards.slice(0, exchange.count);
-    const isCorrectCards = cards.every(card => 
-      requiredCards.some(rc => rc.id === card.id)
-    );
-    
-    if (!isCorrectCards) {
-      return false;
+    // 大貧民/貧民（渡す側）は最強のカードを出す必要がある
+    if (player.currentRank === 'daihinmin' || player.currentRank === 'heimin') {
+      const sortedPlayerCards = [...player.cards].sort((a, b) => {
+        const strengthA = this.revolution ? -a.strength : a.strength;
+        const strengthB = this.revolution ? -b.strength : b.strength;
+        return strengthB - strengthA;
+      });
+      
+      const requiredCards = sortedPlayerCards.slice(0, exchange.count);
+      const isCorrectCards = cards.every(card => 
+        requiredCards.some(rc => rc.id === card.id)
+      );
+      
+      if (!isCorrectCards) {
+        return false;
+      }
     }
+    // 大富豪/富豪は任意のカードを返せる
     
     // 交換を記録
     this.cardExchangeState.exchangesCompleted.push({
@@ -671,7 +736,7 @@ export class GameEngine {
       
       if (!fromPlayer || !toPlayer) return;
       
-      // カードを削除
+      // fromPlayerからカードを削除
       exchange.cards.forEach(card => {
         const index = fromPlayer.cards.findIndex(c => c.id === card.id);
         if (index !== -1) {
@@ -679,20 +744,8 @@ export class GameEngine {
         }
       });
       
-      // 受け取る側（大富豪/富豪）は任意のカードを返す（CPU の場合は最弱のカードを自動選択）
-      const cardsToReturn = this.selectReturnCards(toPlayer, exchange.cards.length);
-      
-      // カードを交換
+      // toPlayerにカードを追加
       toPlayer.cards.push(...exchange.cards);
-      fromPlayer.cards.push(...cardsToReturn);
-      
-      // 返したカードを削除
-      cardsToReturn.forEach(card => {
-        const index = toPlayer.cards.findIndex(c => c.id === card.id);
-        if (index !== -1) {
-          toPlayer.cards.splice(index, 1);
-        }
-      });
     });
     
     this.logAction('card_exchange_completed', {});
